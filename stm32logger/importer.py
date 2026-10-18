@@ -87,6 +87,8 @@ def load_file(path: str, channel_prefix: str = "Kanal") -> Session:
     ext = os.path.splitext(path)[1].lower()
     if ext == ".xlsx":
         s = _load_xlsx(path, channel_prefix)
+    elif ext == ".bin":
+        s = _load_bin(path, channel_prefix)
     else:
         s = _load_text(path, channel_prefix)
     s.port = os.path.basename(path)
@@ -125,6 +127,36 @@ def _lines(path: str):
     with open(path, "r", encoding="utf-8-sig", errors="replace") as f:
         for ln in f:
             yield ln.rstrip("\r\n")
+
+
+def _load_bin(path: str, channel_prefix: str) -> Session:
+    """İkili modun ham yedeği (Oskilo çerçeveleri)."""
+    from .binary import Decoder
+    from .parser import ParsedLine
+
+    dec = Decoder()
+    s = Session(mode="file", seq_mode="on", channel_prefix=channel_prefix)
+    s.seq32 = True
+
+    def take(frames):
+        for fr in frames:
+            if fr[0] == "data":
+                s.add(float(s.n), ParsedLine("data", values=[float(fr[1])] + fr[2]))
+            elif fr[0] != "crc":
+                s.add(float(s.n), ParsedLine(fr[0], count=fr[1]))
+
+    with open(path, "rb") as f:
+        while True:
+            chunk = f.read(1 << 20)
+            if not chunk:
+                break
+            take(dec.feed(chunk))
+    take(dec.flush())
+    s.crc_errors = dec.crc_errors
+    s.flush_pending()
+    if s.n == 0:
+        raise ValueError("no-data")
+    return s
 
 
 def _split(ln: str, delim: str) -> list[str]:

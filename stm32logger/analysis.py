@@ -191,3 +191,67 @@ def sanitize_cmds(raw) -> list[dict]:
         except (TypeError, ValueError, AttributeError):
             continue
     return out
+
+
+# ------------------------------------------------------------------ eşik alarmları
+MAX_ALARMS = 16
+
+
+def sanitize_alarms(raw) -> list[dict]:
+    """Ayarlardan okunan alarm listesini doğrular."""
+    out = []
+    if not isinstance(raw, list):
+        return out
+    for a in raw[:MAX_ALARMS]:
+        try:
+            thr = float(a.get("value"))
+            hyst = abs(float(a.get("hyst", 0) or 0))
+            op = ">" if str(a.get("op", ">")) == ">" else "<"
+            ch = str(a.get("ch", "")).strip()[:80]
+        except (TypeError, ValueError, AttributeError):
+            continue
+        if not ch or not math.isfinite(thr) or not math.isfinite(hyst):
+            continue
+        out.append({"on": bool(a.get("on", True)), "ch": ch, "op": op, "value": thr, "hyst": hyst,
+                    "beep": bool(a.get("beep", False)), "cmd": str(a.get("cmd", "") or "")[:200]})
+    return out
+
+
+def alarm_scan(y, op: str, thr: float, hyst: float, armed: bool, max_hits: int = 200):
+    """Yeni gelen örneklerde eşik geçişlerini bulur.
+
+    Alarm 'kurulu' iken koşul (y > eşik ya da y < eşik) ilk sağlandığı örnekte tetiklenir; sonra
+    değer eşiğin 'geri dönüş payı' kadar gerisine inmeden yeniden kurulmaz (eşik etrafında
+    titreyen sinyal alarm yağdırmasın). NaN değerler yok sayılır.
+    Döndürür: (tetiklenen örneklerin indisleri, son kurulu durumu)
+    """
+    y = np.asarray(y, dtype=np.float64)
+    n = len(y)
+    if not n:
+        return [], armed
+    with np.errstate(invalid="ignore"):
+        if op == ">":
+            hit, back = y > thr, y < thr - hyst
+        else:
+            hit, back = y < thr, y > thr + hyst
+        if hyst == 0:                                  # pay yoksa eşiğin öbür yanı yeter
+            back = ~hit & ~np.isnan(y) & (y != thr)
+    hits = []
+    i = 0
+    while i < n and len(hits) < max_hits:
+        idx = np.flatnonzero(hit[i:] if armed else back[i:])
+        if not len(idx):
+            break
+        j = i + int(idx[0])
+        if armed:
+            hits.append(j)
+        armed = not armed
+        i = j + 1
+    if i < n and len(hits) >= max_hits:               # çok sık tetikleniyor: son durumu hesapla
+        last_hit = np.flatnonzero(hit[i:])
+        last_back = np.flatnonzero(back[i:])
+        lh = last_hit[-1] if len(last_hit) else -1
+        lb = last_back[-1] if len(last_back) else -1
+        if lh >= 0 or lb >= 0:
+            armed = bool(lb > lh)
+    return hits, armed

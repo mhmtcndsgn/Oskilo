@@ -56,12 +56,14 @@ GUIDE: dict[str, dict[str, tuple[str, str, str]]] = {
                 (2, "Yenile", "Kartı sonradan taktıysanız basın. Liste zaten 2 saniyede bir yenilenir."),
                 (3, "Baud hızı", "Kart kodundaki değerle <b>aynı</b> olmalı (ör. 115200, 921600). Listede yoksa elle yazın."),
                 (4, "Çalışma modu", "Canlı izleme ya da Deney aktarımı (sonraki konu)."),
-                (5, "USB koparsa yeniden bağlan", "Kablo çıkarsa ya da kart yeniden başlarsa o ana kadarki veri kaydedilir; port geri gelince otomatik bağlanılır."),
-                (6, "Bağlan / Bağlantıyı kes", "Kısayol: <b>F5</b>."),
-                (7, "Örnekleme frekansı", "Kart sabit hızda örnekliyorsa (ör. 1000 Hz) yazın; Excel'de her örneğin zamanı hesaplanır. Bilmiyorsanız boş bırakın."),
-                (8, "Sıra numarası", "<i>Otomatik algıla</i> çoğu zaman doğrudur. İlk sütun 0, 1, 2… diye artıyorsa kayıp satırlar yakalanır."),
-                (9, "Aktarım bitiş süresi", "Deney aktarımında bu kadar süre veri gelmezse aktarım bitti sayılır. <b>1 s</b> iyi bir değerdir."),
-                (10, "Kanallar ve birimler", "Ham değeri gerçek birime çevirir (ör. ADC → Volt). Ayrıntı: <i>Analiz</i> konusu."))
+                (5, "Veri biçimi", "<b>Metin</b>: kart sayıları yazı olarak gönderir. <b>İkili (CRC)</b>: daha hızlı ve bozuk veriye karşı korumalı (bkz. <i>Kart tarafı: veri biçimi</i>)."),
+                (6, "USB koparsa yeniden bağlan", "Kablo çıkarsa ya da kart yeniden başlarsa o ana kadarki veri kaydedilir; port geri gelince otomatik bağlanılır."),
+                (7, "Bağlan / Bağlantıyı kes", "Kısayol: <b>F5</b>. Kart katlıyken de görünür."),
+                (8, "Örnekleme frekansı", "Kart sabit hızda örnekliyorsa (ör. 1000 Hz) yazın; Excel'de her örneğin zamanı hesaplanır. Bilmiyorsanız boş bırakın."),
+                (9, "Sıra numarası", "<i>Otomatik algıla</i> çoğu zaman doğrudur. İlk sütun 0, 1, 2… diye artıyorsa kayıp satırlar yakalanır."),
+                (10, "Aktarım bitiş süresi", "Deney aktarımında bu kadar süre veri gelmezse aktarım bitti sayılır. <b>1 s</b> iyi bir değerdir."),
+                (11, "Kanallar ve birimler", "Ham değeri gerçek birime çevirir (ör. ADC → Volt). Ayrıntı: <i>Analiz</i> konusu."),
+                (12, "Eşik alarmları", "Bir kanal eşiği aşınca uyarır, not düşer; isterseniz ses çalar ya da karta komut gönderir. Ayrıntı: <i>Analiz</i> konusu."))
             + TIP("⚠️", "<b>Port görünmüyorsa:</b> Arduino klonları ve ESP kartları için <b>CH340</b> ya da <b>CP2102</b> sürücüsünü kurun. "
                          "Kablonun sadece şarj kablosu olmadığından emin olun. Port başka bir programda (Arduino IDE seri monitörü, STM32CubeIDE) açıksa önce oradan kapatın.")),
         "modes": ("Canlı izleme ve deney aktarımı", "Kartınızın veriyi nasıl gönderdiğine göre mod seçin.",
@@ -88,19 +90,28 @@ GUIDE: dict[str, dict[str, tuple[str, str, str]]] = {
             "<h3>STM32 (HAL)</h3>"
             "<pre>n = snprintf(s, sizeof s, \"%lu,%u\\r\\n\", (unsigned long)i, adc_buf[i]);\n"
             "HAL_UART_Transmit(&amp;huart2, (uint8_t*)s, n, HAL_MAX_DELAY);</pre>"
-            + TIP("💡", "Hazır örnek kodlar GitHub sayfasındaki <code>firmware_ornek</code> klasöründe. Ondalıklı sayı yerine değeri 100 ile çarpıp tamsayı da gönderebilirsiniz (25,31 °C → 2531).")),
+            + "<h3>İkili (CRC) biçim — hızlı ve korumalı</h3>"
+            "<p><b>Bağlantı → Veri biçimi → İkili (CRC)</b>. Her örnek küçük bir çerçeve olarak gider; metne göre 2–4 kat az bayt tutar, "
+            "kabloda bozulan çerçeve CRC sayesinde atılır ve sayılır, sıra numarası her çerçevede olduğu için kayıplar tek tek yakalanır.</p>"
+            "<pre>A5 5A | tip | kanal sayısı | sıra no (4 bayt) | değerler | CRC16\n"
+            "tip: uint16, int16, uint32, int32, float32 · START / END çerçeveleri de var</pre>"
+            "<pre>#include \"oskilo_ikili.h\"\n"
+            "static void yaz(const uint8_t *p, uint16_t n) { HAL_UART_Transmit(&amp;huart2, (uint8_t*)p, n, 100); }\n"
+            "osk_gonder_u16(yaz, sira++, adc, 2);   // 2 kanal</pre>"
+            + TIP("💡", "Hazır örnek kodlar GitHub sayfasındaki <code>firmware_ornek</code> klasöründe: metin için <code>veri_gonder.c</code> ve "
+                        "<code>arduino_ornek</code>, ikili için <code>oskilo_ikili.h</code> ve <code>arduino_ikili</code>. Ondalıklı sayı yerine değeri 100 ile çarpıp tamsayı da gönderebilirsiniz (25,31 °C → 2531).")),
         "saving": ("Kayıt ve dosyalar", "Kayıtlar otomatik olarak seçtiğiniz klasöre yazılır.",
             "{img:saving|Kayıt kartı}"
             + S((1, "Dosya biçimi", "<b>Excel</b>: özet, veriler ve grafik sayfaları. <b>CSV</b>: Python/MATLAB için, uzun testlerde en hızlısı. <b>TXT</b>: sekmeyle ayrılmış sade metin."),
-                (2, "Kayıt klasörü", "Varsayılan <code>Belgeler\\Data Logger</code>."),
+                (2, "Kayıt klasörü", "Varsayılan <code>Belgeler\\Oskilo</code>."),
                 (3, "Dosya adı", "Dosyalar <code>ad_2026-10-17_14-30-05.xlsx</code> gibi adlandırılır."),
                 (4, "Bitince otomatik kaydet", "Her aktarım ya da kayıt kendiliğinden kaydedilir."),
                 (5, "Canlı izlemede ara kayıt", "Canlı kayıt bu aralıkla (ör. 5 dk) <b>aynı dosyaya</b> yazılır. Bilgisayar kapanırsa en fazla bu kadar süre kaybolur."),
                 (6, "Ham yedek", "Karttan gelen her bayt hiç değiştirilmeden <code>ham</code> klasörüne de yazılır. Hep açık tutun."),
-                (7, "Şimdi kaydet", "Ekrandaki kaydı hemen dosyasına yazar. Kısayol: <b>Ctrl+S</b>."),
-                (8, "Farklı kaydet", "İstediğiniz ad ve biçimde ayrı bir kopya. Kısayol: <b>Ctrl+Shift+S</b>."),
-                (9, "Klasörü aç", "Kayıt klasörünü Dosya Gezgini'nde açar."),
-                (10, "Kayıtlı dosyayı aç", "Eski kayıtları (v1 dosyaları dahil) grafikte açar. Kısayol: <b>Ctrl+O</b>."))
+                (7, "Klasörü aç", "Kayıt klasörünü Dosya Gezgini'nde açar."),
+                (8, "Kayıtlı dosyayı aç", "Eski kayıtları (v1 dosyaları ve ikili ham yedekler dahil) grafikte açar. Kısayol: <b>Ctrl+O</b>."),
+                (9, "Şimdi kaydet", "Ekrandaki kaydı hemen dosyasına yazar. Kısayol: <b>Ctrl+S</b>. Kart katlıyken de görünür."),
+                (10, "Farklı kaydet", "İstediğiniz ad ve biçimde ayrı bir kopya. Kısayol: <b>Ctrl+Shift+S</b>. Sonradan eklenen notlar da bu dosyaya yazılır."))
             + TIP("🛟", "Kaydedilmemiş veri varken pencereyi kapatırsanız, yeniden bağlanırsanız ya da dosya açarsanız uygulama sorar. "
                         "Dosyalar önce geçici adla yazılır, bitince asıl adını alır; yarım dosya oluşmaz.")),
         "longrun": ("Uzun testler (günler, haftalar)", "Bilgisayarı günlerce kayıtta bırakacaksanız bu sayfayı okuyun.",
@@ -127,8 +138,10 @@ GUIDE: dict[str, dict[str, tuple[str, str, str]]] = {
                 (5, "Gösterge", "Bir kanalın adına tıklayınca o kanal gizlenir / gösterilir."),
                 (6, "HEX / Duraklat / Temizle", "<b>HEX</b> gelen baytları onaltılık gösterir (baud yanlışsa ya da kart ikili veri gönderiyorsa işe yarar). Temizle: <b>Ctrl+L</b>. Kayıt etkilenmez."),
                 (7, "Hızlı komut butonları", "Sık gönderdiğiniz komutlar tek tıkla gider. <b>＋</b> ile ekleyin, sağ tıkla düzenleyin / silin. Tekrar aralığı verirseniz buton basılı kaldıkça komut her X saniyede bir gönderilir."),
-                (8, "Komut gönder", "Karta yazı gönderir (ör. <code>GONDER</code>). <b>HEX</b> işaretliyse <code>01 A0 FF</code> gibi bayt gönderir. <b>↑ / ↓</b> önceki komutları getirir."))
-            + TIP("🖱️", "Tekerlek: yakınlaştır · Sol tık sürükle: kaydır · Sağ tık: eksen seçenekleri")),
+                (8, "Komut gönder", "Karta yazı gönderir (ör. <code>GONDER</code>). <b>HEX</b> işaretliyse <code>01 A0 FF</code> gibi bayt gönderir. <b>↑ / ↓</b> önceki komutları getirir."),
+                (9, "Grafiği gizle / göster", "<b>▾ Grafik</b>'e tıklayınca grafik küçülür, yeri terminale kalır; sadece terminalden okumak için. Gizliyken grafik hiç çizilmez, bilgisayar rahatlar; kayıt aynen sürer."))
+            + TIP("🖱️", "Tekerlek: yakınlaştır · Sol tık sürükle: kaydır · Sağ tık: eksen seçenekleri. Grafik verinin dışına kaçmaz: "
+                        "en fazla tüm veri sığana kadar uzaklaşır, sürükleyince verinin biraz ötesinde durur.")),
         "analysis": ("Analiz: FFT, imleç, istatistik, notlar", "Kaydı uygulamadan çıkmadan inceleyin.",
             "{img:analysis|Analiz araçları}"
             + S((1, "📏 İmleç", "Grafiğe A ve B çizgileri koyar. Fareyle sürükleyin."),
@@ -143,11 +156,24 @@ GUIDE: dict[str, dict[str, tuple[str, str, str]]] = {
             "<b>gerçek değer = ham × çarpan + ofset</b>. <b>ADC → Volt…</b> butonu referans gerilimi ve bit sayısından çarpanı hesaplar "
             "(12 bit, 3,3 V → 0,000806). Grafik, istatistik ve kaydedilen dosyalar dönüştürülmüş değerleri kullanır; sütun adı "
             "<code>Kanal 1 [V]</code> olur. Ham yedek hiç değişmez.</p>"
-            + TIP("💡", "Örnek: LM35 sıcaklık sensörü 10 mV/°C verir. 12 bit ADC, 3,3 V ile çarpan = 0,000806 × 100 = 0,0806, birim °C.")),
+            + TIP("💡", "Örnek: LM35 sıcaklık sensörü 10 mV/°C verir. 12 bit ADC, 3,3 V ile çarpan = 0,000806 × 100 = 0,0806, birim °C.")
+            + "<h3>Eşik alarmları</h3>"
+            "{img:alarms_dlg|Eşik alarmları penceresi}"
+            "<p><b>Veri ayarları → Eşik alarmları…</b>: kanal, koşul (üstüne çıkarsa / altına inerse) ve eşik girin. "
+            "Eşik, birim dönüşümü yapılmış değerle karşılaştırılır (ör. 3,0 V).</p>"
+            "{img:alarms|Alarm çalınca}"
+            + S((1, "Uyarı bandı", "Hangi kanalın hangi değerle eşiği aştığı ve saati."),
+                (2, "Eşik çizgisi", "Grafikte kırmızı kesikli çizgi."),
+                (3, "Otomatik not", "Alarmın olduğu satıra not düşülür: grafikte sarı çizgi, Excel'de <b>Not</b> sütunu."))
+            + TIP("🔔", "<b>Geri dönüş payı</b>: değer eşiğin bu kadar gerisine inmeden alarm yeniden kurulmaz; eşik etrafında titreyen sinyal alarm yağdırmaz. "
+                        "<b>Ses</b> ve <b>karta komut</b> (ör. <code>STOP</code>) isteğe bağlıdır; aynı alarm saniyede en fazla bir kez not, ses ve komut üretir.")),
         "look": ("Tema ve kısayollar", "Uygulamayı istediğiniz renklerde kullanın.",
             "<p>Sağ üstteki renkli yuvarlak butondan seçin:</p>"
             + S(("🌗", "Görünüm", "<b>Koyu</b>, <b>Açık</b> ya da <b>Sistem</b> (Windows'un koyu/açık ayarına uyar)."),
-                ("🎨", "Renk", "<b>Nötr</b> (klasik gri), mavi, pembe, mor, yeşil, turuncu ya da turkuaz. Renk seçince bütün ekran — zemin, kartlar, grafik, terminal — o rengin tonlarına bürünür."))
+                ("🎨", "Renk", "<b>Oskilo</b> (logonun laciverti ve turkuazı, varsayılan), <b>Nötr</b> (klasik gri), mavi, pembe, mor, yeşil, turuncu ya da turkuaz. Renk seçince bütün ekran — zemin, kartlar, grafik, terminal — o rengin tonlarına bürünür. "
+                        "Windows 11'de pencerenin başlık çubuğu ve uyarı pencereleri de aynı renge boyanır (Windows 10'da koyu/açık)."),
+                ("▾", "Daha sade ekran", "Soldaki kartların (Bağlantı, Veri ayarları, Kayıt) başlığına tıklayınca katlanır; katlıyken yanında kısa bir özet görünür. "
+                        "Grafik de <b>▾ Grafik</b> ile gizlenebilir. Uygulama hangilerinin açık olduğunu hatırlar."))
             + "<h3>Kısayollar</h3>"
             + TABLE(["Tuş", "İş"],
                     [["<b>F5</b>", "Bağlan / bağlantıyı kes"], ["<b>Ctrl+S</b>", "Şimdi kaydet"],
@@ -166,15 +192,15 @@ GUIDE: dict[str, dict[str, tuple[str, str, str]]] = {
                      ["Aktarım iki dosyaya bölünüyor", "<b>Aktarım bitiş süresi</b> çok kısa; 1–2 s yapın."],
                      ["Port açılamadı", "Port başka programda açık (seri monitör, CubeIDE) ya da kart çıkarıldı."],
                      ["\"Bağlantı koptu, yeniden bağlanıyor…\"", "Gevşek kablo ya da kart yeniden başladı. Veri kaydedildi; sürekli oluyorsa başka kablo / USB girişi deneyin."],
-                     ["Uygulama tuhaf davranıyor", "<b>? → Ayarları sıfırla</b> (açılmıyorsa <code>Data_Logger.exe --reset-settings</code>)."]])
+                     ["Uygulama tuhaf davranıyor", "<b>? → Ayarları sıfırla</b> (açılmıyorsa <code>Oskilo.exe --reset-settings</code>)."]])
             + "<p>Çözemediğiniz bir sorun olursa <b>? → Hata bildir / öneri</b> ile yazın.</p>"),
         "security": ("Güvenlik ve Windows uyarısı", "Uygulama yönetici izni istemez, sistem ayarlarına dokunmaz.",
             "<h3>Dosyaların sağlam olduğunu kontrol etmek</h3>"
             + S(("✓", "Herkese açık derleme", "Uygulama sadece GitHub'daki açık derleme sisteminde, bu repodaki koddan üretilir; her sürümde derleme kanıtı vardır."),
                 ("✓", "Dosyaları doğrula", "<b>? → Hakkında → Dosyaları doğrula</b>: klasördeki her dosyanın parmak izi (SHA-256) derlemeyle karşılaştırılır; değişen, eksik ya da sonradan eklenen dosyalar gösterilir."),
-                ("✓", "İndirmeyi doğrula", "En güçlü kontrol: zip'in parmak izi sürüm sayfasındaki <code>SHA256SUMS.txt</code> ile aynı olmalı (PowerShell: <code>Get-FileHash Data_Logger_Windows.zip</code>)."))
+                ("✓", "İndirmeyi doğrula", "En güçlü kontrol: zip'in parmak izi sürüm sayfasındaki <code>SHA256SUMS.txt</code> ile aynı olmalı (PowerShell: <code>Get-FileHash Oskilo_Windows.zip</code>)."))
             + "<h3>\"Bu dosyayı çalıştırmak istiyor musunuz?\" uyarısı</h3>"
-            "<p>Windows bu uyarıyı internetten indirilen ve <b>dijital imzası olmayan</b> programlarda gösterir. Data Logger açık kaynaklıdır; uyarı sadece henüz imza sertifikası olmamasından kaynaklanır.</p>"
+            "<p>Windows bu uyarıyı internetten indirilen ve <b>dijital imzası olmayan</b> programlarda gösterir. Oskilo açık kaynaklıdır; uyarı sadece henüz imza sertifikası olmamasından kaynaklanır.</p>"
             + S(("1", "Mavi ekran", "<b>Ek bilgi → Yine de çalıştır</b>. Windows bu kararı hatırlar."),
                 ("2", "İlk açılış", "Uygulama durumu söyler: uyarı kalktıysa bilgi verir; kalkmadıysa sizin izninizle etiketi <b>sadece kendi, değişmemiş dosyalarından</b> kaldırır."),
                 ("3", "Başkasına gönderirken", "Zip'i açmadan önce sağ tık → <b>Özellikler</b> → <b>Engellemeyi kaldır</b> → Tamam."))
@@ -199,12 +225,14 @@ GUIDE: dict[str, dict[str, tuple[str, str, str]]] = {
                 (2, "Refresh", "Use it if you plugged the board in later. The list also refreshes every 2 seconds."),
                 (3, "Baud rate", "Must be the <b>same</b> as in your firmware (e.g. 115200, 921600). You can type a custom value."),
                 (4, "Mode", "Live monitor or Experiment dump (next topic)."),
-                (5, "Reconnect if USB drops", "If the cable is unplugged or the board restarts, the data so far is saved and the app reconnects when the port is back."),
-                (6, "Connect / Disconnect", "Shortcut: <b>F5</b>."),
-                (7, "Sample rate", "If your board samples at a fixed rate (e.g. 1000 Hz), enter it; Excel then gets a time column. Leave it empty if unknown."),
-                (8, "Sequence number", "<i>Auto-detect</i> is usually right. If the first column counts 0, 1, 2…, lost lines are detected."),
-                (9, "Transfer end timeout", "In experiment dump mode the transfer counts as finished after this much silence. <b>1 s</b> is a good value."),
-                (10, "Channels and units", "Converts raw values to real units (e.g. ADC → Volt). Details: <i>Analysis</i> topic."))
+                (5, "Data format", "<b>Text</b>: the board sends numbers as text. <b>Binary (CRC)</b>: faster and protected against corrupted data (see <i>Board side: data format</i>)."),
+                (6, "Reconnect if USB drops", "If the cable is unplugged or the board restarts, the data so far is saved and the app reconnects when the port is back."),
+                (7, "Connect / Disconnect", "Shortcut: <b>F5</b>. Stays visible when the card is collapsed."),
+                (8, "Sample rate", "If your board samples at a fixed rate (e.g. 1000 Hz), enter it; Excel then gets a time column. Leave it empty if unknown."),
+                (9, "Sequence number", "<i>Auto-detect</i> is usually right. If the first column counts 0, 1, 2…, lost lines are detected."),
+                (10, "Transfer end timeout", "In experiment dump mode the transfer counts as finished after this much silence. <b>1 s</b> is a good value."),
+                (11, "Channels and units", "Converts raw values to real units (e.g. ADC → Volt). Details: <i>Analysis</i> topic."),
+                (12, "Threshold alarms", "Warns and adds a note when a channel crosses a threshold; optionally plays a sound or sends a command to the board. Details: <i>Analysis</i> topic."))
             + TIP("⚠️", "<b>Port not listed?</b> Install the <b>CH340</b> or <b>CP2102</b> driver for Arduino clones and ESP boards. "
                          "Make sure the cable is not charge-only, and close the port in other programs (Arduino IDE serial monitor, STM32CubeIDE).")),
         "modes": ("Live vs. experiment mode", "Pick the mode that matches how your board sends data.",
@@ -231,19 +259,28 @@ GUIDE: dict[str, dict[str, tuple[str, str, str]]] = {
             "<h3>STM32 (HAL)</h3>"
             "<pre>n = snprintf(s, sizeof s, \"%lu,%u\\r\\n\", (unsigned long)i, adc_buf[i]);\n"
             "HAL_UART_Transmit(&amp;huart2, (uint8_t*)s, n, HAL_MAX_DELAY);</pre>"
-            + TIP("💡", "Complete examples are in the <code>firmware_ornek</code> folder on GitHub. Instead of decimals you can multiply by 100 and send an integer (25.31 °C → 2531).")),
+            + "<h3>Binary (CRC) format — fast and protected</h3>"
+            "<p><b>Connection → Data format → Binary (CRC)</b>. Each sample travels as a small frame: 2–4× fewer bytes than text, "
+            "a frame corrupted on the cable is dropped and counted thanks to its CRC, and every frame carries a sequence number so losses are caught one by one.</p>"
+            "<pre>A5 5A | type | channel count | sequence (4 bytes) | values | CRC16\n"
+            "type: uint16, int16, uint32, int32, float32 · plus START / END frames</pre>"
+            "<pre>#include \"oskilo_ikili.h\"\n"
+            "static void put(const uint8_t *p, uint16_t n) { HAL_UART_Transmit(&amp;huart2, (uint8_t*)p, n, 100); }\n"
+            "osk_gonder_u16(put, seq++, adc, 2);   // 2 channels</pre>"
+            + TIP("💡", "Complete examples are in the <code>firmware_ornek</code> folder on GitHub: <code>veri_gonder.c</code> and "
+                        "<code>arduino_ornek</code> for text, <code>oskilo_ikili.h</code> and <code>arduino_ikili</code> for binary. Instead of decimals you can multiply by 100 and send an integer (25.31 °C → 2531).")),
         "saving": ("Saving and files", "Recordings are written to your folder automatically.",
             "{img:saving|Saving card}"
             + S((1, "File format", "<b>Excel</b>: summary, data and chart sheets. <b>CSV</b>: for Python/MATLAB, fastest for long tests. <b>TXT</b>: plain tab-separated text."),
-                (2, "Output folder", "<code>Documents\\Data Logger</code> by default."),
+                (2, "Output folder", "<code>Documents\\Oskilo</code> by default."),
                 (3, "File name", "Files are named like <code>name_2026-10-17_14-30-05.xlsx</code>."),
                 (4, "Save automatically when done", "Every transfer or recording is saved on its own."),
                 (5, "Interim save in live mode", "The live recording is written to the <b>same file</b> at this interval (e.g. 5 min). If the computer shuts down, at most this much is lost."),
                 (6, "Raw backup", "Every byte from the board is also written, untouched, to the <code>ham</code> folder. Keep it on."),
-                (7, "Save now", "Writes the recording on screen to its file right away. Shortcut: <b>Ctrl+S</b>."),
-                (8, "Save as", "A separate copy with any name and format. Shortcut: <b>Ctrl+Shift+S</b>."),
-                (9, "Open folder", "Opens the output folder."),
-                (10, "Open saved file", "Reopens earlier recordings (including v1 files) in the chart. Shortcut: <b>Ctrl+O</b>."))
+                (7, "Open folder", "Opens the output folder."),
+                (8, "Open saved file", "Reopens earlier recordings (including v1 files and binary raw backups) in the chart. Shortcut: <b>Ctrl+O</b>."),
+                (9, "Save now", "Writes the recording on screen to its file right away. Shortcut: <b>Ctrl+S</b>. Stays visible when the card is collapsed."),
+                (10, "Save as", "A separate copy with any name and format. Shortcut: <b>Ctrl+Shift+S</b>. Notes added later also go to this file."))
             + TIP("🛟", "If a recording is not saved yet, the app asks before you close the window, connect again or open a file. "
                         "Files are written under a temporary name first and renamed when complete, so no half-written files.")),
         "longrun": ("Long tests (days, weeks)", "Read this before leaving the computer recording for days.",
@@ -270,8 +307,10 @@ GUIDE: dict[str, dict[str, tuple[str, str, str]]] = {
                 (5, "Legend", "Click a channel name to hide or show it."),
                 (6, "HEX / Pause / Clear", "<b>HEX</b> shows received bytes in hexadecimal (useful with a wrong baud rate or binary data). Clear: <b>Ctrl+L</b>. Recording is not affected."),
                 (7, "Quick command buttons", "Commands you send often, one click away. Add with <b>＋</b>, right-click to edit / delete. With a repeat interval the button stays pressed and sends the command every X seconds."),
-                (8, "Send command", "Sends text to the board (e.g. <code>SEND</code>). With <b>HEX</b> ticked it sends bytes like <code>01 A0 FF</code>. <b>↑ / ↓</b> recalls previous commands."))
-            + TIP("🖱️", "Wheel: zoom · Left-drag: pan · Right-click: axis options")),
+                (8, "Send command", "Sends text to the board (e.g. <code>SEND</code>). With <b>HEX</b> ticked it sends bytes like <code>01 A0 FF</code>. <b>↑ / ↓</b> recalls previous commands."),
+                (9, "Hide / show chart", "Click <b>▾ Chart</b> to fold the chart away and give its space to the terminal, for reading the terminal only. While hidden the chart is not drawn at all, which saves CPU; recording continues."))
+            + TIP("🖱️", "Wheel: zoom · Left-drag: pan · Right-click: axis options. The view never runs off the data: "
+                        "you can zoom out until all data fits, and panning stops just past the data.")),
         "analysis": ("Analysis: FFT, cursors, statistics, notes", "Inspect the recording without leaving the app.",
             "{img:analysis|Analysis tools}"
             + S((1, "📏 Cursors", "Places lines A and B on the chart. Drag them with the mouse."),
@@ -286,11 +325,24 @@ GUIDE: dict[str, dict[str, tuple[str, str, str]]] = {
             "<b>real value = raw × scale + offset</b>. <b>ADC → Volt…</b> computes the scale from the reference voltage and bit count "
             "(12-bit, 3.3 V → 0.000806). The chart, statistics and saved files use the converted values; the column is named "
             "<code>Channel 1 [V]</code>. The raw backup never changes.</p>"
-            + TIP("💡", "Example: an LM35 temperature sensor gives 10 mV/°C. With a 12-bit ADC at 3.3 V the scale is 0.000806 × 100 = 0.0806, unit °C.")),
+            + TIP("💡", "Example: an LM35 temperature sensor gives 10 mV/°C. With a 12-bit ADC at 3.3 V the scale is 0.000806 × 100 = 0.0806, unit °C.")
+            + "<h3>Threshold alarms</h3>"
+            "{img:alarms_dlg|Threshold alarms window}"
+            "<p><b>Data settings → Threshold alarms…</b>: pick a channel, a condition (rises above / falls below) and a threshold. "
+            "The threshold is compared with the unit-converted value (e.g. 3.0 V).</p>"
+            "{img:alarms|When an alarm fires}"
+            + S((1, "Warning banner", "Which channel crossed its threshold, at what value and when."),
+                (2, "Threshold line", "A dashed red line on the chart."),
+                (3, "Automatic note", "A note is added on the row where the alarm fired: yellow line on the chart, <b>Note</b> column in Excel."))
+            + TIP("🔔", "<b>Hysteresis</b>: the alarm re-arms only after the value moves back by this much, so a signal jittering around the threshold does not flood alarms. "
+                        "<b>Sound</b> and <b>command to board</b> (e.g. <code>STOP</code>) are optional; the same alarm produces at most one note, sound and command per second.")),
         "look": ("Theme and shortcuts", "Use the app in the colors you like.",
             "<p>Use the colored round button at the top right:</p>"
             + S(("🌗", "Appearance", "<b>Dark</b>, <b>Light</b> or <b>System</b> (follows Windows' dark/light setting)."),
-                ("🎨", "Color", "<b>Neutral</b> (classic gray), blue, pink, purple, green, orange or teal. With a color, the whole screen — background, cards, chart, terminal — takes on its shades."))
+                ("🎨", "Color", "<b>Oskilo</b> (the logo's navy and teal, default), <b>Neutral</b> (classic gray), blue, pink, purple, green, orange or teal. With a color, the whole screen — background, cards, chart, terminal — takes on its shades. "
+                        "On Windows 11 the window title bar and message boxes take the same color (dark/light on Windows 10)."),
+                ("▾", "A tidier screen", "Click the title of a card on the left (Connection, Data settings, Saving) to fold it; a short summary shows next to the title. "
+                        "The chart can be hidden with <b>▾ Chart</b> too. The app remembers which ones are open."))
             + "<h3>Shortcuts</h3>"
             + TABLE(["Key", "Action"],
                     [["<b>F5</b>", "Connect / disconnect"], ["<b>Ctrl+S</b>", "Save now"],
@@ -309,15 +361,15 @@ GUIDE: dict[str, dict[str, tuple[str, str, str]]] = {
                      ["One transfer split into two files", "<b>Transfer end timeout</b> is too short; use 1–2 s."],
                      ["Could not open port", "The port is open in another program, or the board was unplugged."],
                      ["\"Connection lost, reconnecting…\"", "Loose cable or the board restarted. Data was saved; if it keeps happening try another cable / USB port."],
-                     ["The app behaves oddly", "<b>? → Reset settings</b> (if it does not open: <code>Data_Logger.exe --reset-settings</code>)."]])
+                     ["The app behaves oddly", "<b>? → Reset settings</b> (if it does not open: <code>Oskilo.exe --reset-settings</code>)."]])
             + "<p>Still stuck? Use <b>? → Report a problem / suggestion</b>.</p>"),
         "security": ("Security & Windows warning", "The app never asks for administrator rights or changes system settings.",
             "<h3>Checking that the files are intact</h3>"
             + S(("✓", "Public build", "The app is built only by the public GitHub build system from this repository; every release has build provenance."),
                 ("✓", "Verify files", "<b>? → About → Verify files</b> compares every file's fingerprint (SHA-256) with the build and lists modified, missing or added files."),
-                ("✓", "Verify the download", "Strongest check: the zip's fingerprint must match <code>SHA256SUMS.txt</code> on the release page (PowerShell: <code>Get-FileHash Data_Logger_Windows.zip</code>)."))
+                ("✓", "Verify the download", "Strongest check: the zip's fingerprint must match <code>SHA256SUMS.txt</code> on the release page (PowerShell: <code>Get-FileHash Oskilo_Windows.zip</code>)."))
             + "<h3>\"Do you want to run this file?\" warning</h3>"
-            "<p>Windows shows this for programs downloaded from the internet that are <b>not digitally signed</b>. Data Logger is open source; the warning only appears because it has no signing certificate yet.</p>"
+            "<p>Windows shows this for programs downloaded from the internet that are <b>not digitally signed</b>. Oskilo is open source; the warning only appears because it has no signing certificate yet.</p>"
             + S(("1", "Blue screen", "<b>More info → Run anyway</b>. Windows remembers that choice."),
                 ("2", "First launch", "The app tells you the status: if the mark is gone it just informs you; otherwise, with your permission, it removes it <b>only from its own unmodified files</b>."),
                 ("3", "Sharing with others", "Before extracting, right-click the zip → <b>Properties</b> → <b>Unblock</b> → OK."))

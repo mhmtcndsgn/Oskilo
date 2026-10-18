@@ -100,6 +100,8 @@ class Session:
         self.out_of_order = 0             # geri giden sıra numarası
         self.fixed_seq = 0                # bozuk gelip düzeltilen sıra numarası
         self.bad_lines = 0                # bozuk satır (yanlış sütun sayısı vb.)
+        self.crc_errors = 0               # ikili modda CRC'si tutmayan (atılan) çerçeve
+        self.seq32 = False                # sıra no 32 bit (ikili çerçeve): 16 bit taşma düzeltmesi yapılmaz
         self.dropped_channels = 0         # MAX_CHANNELS aşıldığı için alınmayan kanal değeri
         self.expected: int | None = None  # START,N
         self.end_count: int | None = None  # END,N
@@ -143,6 +145,7 @@ class Session:
         Bağlantı koptuysa kart yeniden başlamış olabilir; o durumda sıra kontrolü sıfırdan başlar.
         """
         self.header = list(old.header) if old.header else None
+        self.seq32 = old.seq32
         if self.seq_mode == "auto" and old.has_seq is not None:
             self.has_seq = old.has_seq
         self._ncols = old._ncols
@@ -300,7 +303,8 @@ class Session:
         """Sıra numarasını kontrol eder; saklanacak (taşma düzeltilmiş) değeri döndürür."""
         s = raw + self._seq_off
         last = self._last_seq
-        if last is not None and s < last and last - s > 32768 and last - self._seq_off <= 65535 and raw < 32768:
+        if (not self.seq32 and last is not None and s < last and last - s > 32768
+                and last - self._seq_off <= 65535 and raw < 32768):
             self._seq_off += 65536            # 16 bit sayaç 65535 -> 0
             s = raw + self._seq_off
 
@@ -351,7 +355,7 @@ class Session:
 
     @property
     def integrity_ok(self) -> bool:
-        return self.missing == 0 and self.out_of_order == 0 and self.bad_lines == 0
+        return self.missing == 0 and self.out_of_order == 0 and self.bad_lines == 0 and self.crc_errors == 0
 
     def finish(self, reason: str) -> None:
         self.flush_pending()

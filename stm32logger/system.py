@@ -18,10 +18,82 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
-from . import APP_NAME, REPO_URL, __version__
+from . import APP_NAME, OLD_SETTINGS_APPS, ORG_NAME, REPO_URL, SETTINGS_APP, __version__
 
 ZONE = ":Zone.Identifier"   # Windows "internetten indirildi" etiketi (NTFS alternatif akış)
 MANIFEST = "manifest.sha256"
+
+
+# ---------------------------------------------------------------- ayarlar
+_MIGRATED = "_migrated_from_old"
+
+
+def app_settings():
+    """Uygulamanın ayarları. İlk açılışta önceki adla (Data Logger) kaydedilmiş ayarlar taşınır,
+    böylece güncelleyen kullanıcının kayıt klasörü, tema, birimler vb. kaybolmaz."""
+    from PySide6.QtCore import QSettings
+
+    s = QSettings(ORG_NAME, SETTINGS_APP)
+    s.setFallbacksEnabled(False)          # kuruluş düzeyindeki ortak ayarlar bu uygulamanınmış gibi sayılmasın
+    if not s.contains(_MIGRATED):
+        for old_name in OLD_SETTINGS_APPS:
+            old = QSettings(ORG_NAME, old_name)
+            old.setFallbacksEnabled(False)
+            keys = old.allKeys()
+            if keys:
+                for k in keys:
+                    if not s.contains(k):
+                        s.setValue(k, old.value(k))
+                break
+        s.setValue(_MIGRATED, "true")     # bir daha taşınmasın (sıfırlansa bile)
+        s.sync()
+    return s
+
+
+def reset_settings(s) -> None:
+    """Ayarları sıfırlar; eski sürüm ayarları tekrar taşınmaz."""
+    s.clear()
+    s.setValue(_MIGRATED, "true")
+    s.sync()
+
+
+# ---------------------------------------------------------------- Windows başlık çubuğu
+def _colorref(hexcol: str) -> int:
+    r, g, b = (int(hexcol[i:i + 2], 16) for i in (1, 3, 5))
+    return r | (g << 8) | (b << 16)
+
+
+def set_title_bar(hwnd: int, caption: str, text: str, border: str, dark: bool) -> bool:
+    """Pencerenin başlık çubuğunu tema renklerine boyar (Windows).
+
+    Windows 11: başlık, yazı ve kenar rengi doğrudan verilir.
+    Windows 10: renk verilemez; sadece koyu/açık başlık seçilir.
+    Döndürür: renk uygulandıysa True. Hata olursa sessizce False (pencere varsayılan kalır).
+    """
+    if sys.platform != "win32" or not hwnd:
+        return False
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        dwm = ctypes.windll.dwmapi
+
+        def setattr_(attr: int, value: int) -> bool:
+            v = ctypes.c_uint(value)
+            return dwm.DwmSetWindowAttribute(wintypes.HWND(hwnd), ctypes.c_uint(attr),
+                                             ctypes.byref(v), ctypes.sizeof(v)) == 0
+
+        if not setattr_(20, 1 if dark else 0):      # DWMWA_USE_IMMERSIVE_DARK_MODE
+            setattr_(19, 1 if dark else 0)          # Windows 10 1809–1909'daki eski numara
+        ok = setattr_(35, _colorref(caption))       # DWMWA_CAPTION_COLOR (Windows 11+)
+        if ok:
+            setattr_(36, _colorref(text))           # DWMWA_TEXT_COLOR
+            setattr_(34, _colorref(border))         # DWMWA_BORDER_COLOR
+        # açık pencerede başlık hemen yeniden çizilsin
+        ctypes.windll.user32.SetWindowPos(wintypes.HWND(hwnd), None, 0, 0, 0, 0, 0x0001 | 0x0002 | 0x0004 | 0x0010 | 0x0020)
+        return ok
+    except Exception:  # noqa: BLE001
+        return False
 
 
 # ---------------------------------------------------------------- Windows engel kaldırma

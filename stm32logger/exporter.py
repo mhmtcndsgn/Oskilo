@@ -125,6 +125,8 @@ def summary_rows(s: Session, lang: str, n: int | None = None, notes=None, units=
                      + (" …" if len(s.gaps) > 50 else "")))
     if s.bad_lines:
         rows.append((t("sum_bad_lines"), str(s.bad_lines)))
+    if s.crc_errors:
+        rows.append((t("sum_crc"), str(s.crc_errors)))
     if s.fixed_seq:
         rows.append((t("sum_fixed"), str(s.fixed_seq)))
     if s.out_of_order:
