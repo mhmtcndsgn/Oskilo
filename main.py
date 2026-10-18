@@ -1,4 +1,4 @@
-"""Data Logger — giriş noktası.
+"""Oskilo — giriş noktası.
 
 Kaynak koddan çalıştırma:
     pip install -r requirements.txt
@@ -26,11 +26,11 @@ _fault_file = None
 def _log_dir() -> Path:
     """Hata kayıtlarının klasörü (kullanıcının belgelerini kirletmez)."""
     if sys.platform == "win32":
-        base = Path(os.environ.get("LOCALAPPDATA") or Path.home() / "AppData" / "Local") / "Data Logger"
+        base = Path(os.environ.get("LOCALAPPDATA") or Path.home() / "AppData" / "Local") / "Oskilo"
     elif sys.platform == "darwin":
-        base = Path.home() / "Library" / "Logs" / "Data Logger"
+        base = Path.home() / "Library" / "Logs" / "Oskilo"
     else:
-        base = Path(os.environ.get("XDG_STATE_HOME") or Path.home() / ".local" / "state") / "data-logger"
+        base = Path(os.environ.get("XDG_STATE_HOME") or Path.home() / ".local" / "state") / "oskilo"
     try:
         base.mkdir(parents=True, exist_ok=True)
         return base
@@ -39,7 +39,7 @@ def _log_dir() -> Path:
 
 
 def _crash_log_path() -> str:
-    return str(_log_dir() / "data_logger_hata.txt")
+    return str(_log_dir() / "oskilo_hata.txt")
 
 
 def _append_log(path: str, text: str) -> None:
@@ -58,11 +58,9 @@ def _append_log(path: str, text: str) -> None:
 
 def _ui_lang() -> str:
     try:
-        from PySide6.QtCore import QSettings
+        from stm32logger.system import app_settings
 
-        from stm32logger import ORG_NAME
-
-        lang = str(QSettings(ORG_NAME, "DataLogger").value("lang", "tr"))
+        lang = str(app_settings().value("lang", "tr"))
         return lang if lang in ("tr", "en") else "tr"
     except Exception:  # noqa: BLE001
         return "tr"
@@ -85,7 +83,7 @@ def _excepthook(exc_type, exc, tb):
         if QApplication.instance():
             from stm32logger.i18n import T
 
-            box = QMessageBox(QMessageBox.Critical, "Data Logger", T(_ui_lang())("crash", path=path))
+            box = QMessageBox(QMessageBox.Critical, "Oskilo", T(_ui_lang())("crash", path=path))
             box.setTextFormat(Qt.PlainText)
             box.setDetailedText(err[-4000:])
             box.exec()
@@ -103,12 +101,12 @@ def _single_instance(app):
 
     from stm32logger.i18n import T
 
-    lock = QLockFile(os.path.join(QDir.tempPath(), "data_logger_mhmtcndsgn.lock"))
+    lock = QLockFile(os.path.join(QDir.tempPath(), "oskilo_mhmtcndsgn.lock"))
     lock.setStaleLockTime(0)
     if lock.tryLock(100):
         return lock
     t = T(_ui_lang())
-    box = QMessageBox(QMessageBox.Question, "Data Logger", t("already_running"))
+    box = QMessageBox(QMessageBox.Question, "Oskilo", t("already_running"))
     go = box.addButton(t("open_anyway"), QMessageBox.AcceptRole)
     box.addButton(t("cancel"), QMessageBox.RejectRole)
     box.exec()
@@ -119,7 +117,7 @@ def main() -> int:
     global _fault_file
     sys.excepthook = _excepthook
     try:   # Python seviyesinde yakalanamayan çökmeler (ör. sürücü hatası) de kayda geçsin
-        _fault_file = open(_log_dir() / "data_logger_cokme.txt", "a", encoding="utf-8")
+        _fault_file = open(_log_dir() / "oskilo_cokme.txt", "a", encoding="utf-8")
         faulthandler.enable(_fault_file)
     except (OSError, RuntimeError, ValueError):
         pass
@@ -129,7 +127,7 @@ def main() -> int:
         try:
             import ctypes
 
-            ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("mhmtcndsgn.datalogger")
+            ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("mhmtcndsgn.oskilo")
         except Exception:
             pass
 
@@ -137,16 +135,14 @@ def main() -> int:
     from PySide6.QtWidgets import QApplication
 
     app = QApplication(sys.argv)
-    app.setApplicationName("Data Logger")
+    app.setApplicationName("Oskilo")
     app.setOrganizationName("mhmtcndsgn")
     app.setStyle("Fusion")
 
     if "--reset-settings" in sys.argv:
-        from PySide6.QtCore import QSettings
+        from stm32logger.system import app_settings, reset_settings
 
-        from stm32logger import ORG_NAME
-
-        QSettings(ORG_NAME, "DataLogger").clear()
+        reset_settings(app_settings())
     lock = None
     if "--selftest" not in sys.argv:
         lock = _single_instance(app)
@@ -179,7 +175,7 @@ def main() -> int:
 def _selftest(app, win) -> None:
     """Paketlenmiş uygulamanın uçtan uca çalıştığını doğrular (CI'da kullanılır).
 
-    Data_Logger --selftest sonuc.txt
+    Oskilo --selftest sonuc.txt
     DEMO portuna bağlanır, bir deney aktarımı alır, Excel + PNG kaydeder, çıkar.
     """
     import tempfile

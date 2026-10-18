@@ -1,27 +1,28 @@
 <p align="center">
-  <img src="assets/icon.png" width="96" alt="Data Logger simgesi">
+  <img src="assets/icon.png" width="96" alt="Oskilo simgesi">
 </p>
 
-<h1 align="center">Data Logger</h1>
+<h1 align="center">Oskilo</h1>
 
 <p align="center">
   <a href="README.md">🇬🇧 English</a> · <b>🇹🇷 Türkçe</b>
 </p>
 
 <p align="center">
-  <b>STM32, Arduino, ESP32</b> ve seri porttan satır satır veri gönderen her kart için kayıpsız veri kaydedici.<br>
-  Canlı grafik, kayıp veri tespiti ve tek tıkla <b>Excel / CSV / TXT</b> çıktısı.
+  <b>STM32, Arduino, ESP32</b> ve seri porttan veri gönderen her kart için kayıpsız veri kaydedici.<br>
+  Canlı grafik, kayıp veri tespiti, FFT, eşik alarmları ve tek tıkla <b>Excel / CSV / TXT</b> çıktısı.<br>
+  <sub>Eski adı: <i>Data Logger</i> (v2.x)</sub>
 </p>
 
 <p align="center">
-  <a href="https://github.com/mhmtcndsgn/Data-Logger/releases/latest/download/Data_Logger_Windows.zip"><img src="https://img.shields.io/badge/%C4%B0ndir-Windows-0078D6?style=for-the-badge&logo=windows&logoColor=white" alt="Windows için indir"></a>
-  <a href="https://github.com/mhmtcndsgn/Data-Logger/releases/latest/download/Data_Logger_macOS.dmg"><img src="https://img.shields.io/badge/%C4%B0ndir-macOS-000000?style=for-the-badge&logo=apple&logoColor=white" alt="macOS için indir"></a>
+  <a href="https://github.com/mhmtcndsgn/Oskilo/releases/latest/download/Oskilo_Windows.zip"><img src="https://img.shields.io/badge/%C4%B0ndir-Windows-0078D6?style=for-the-badge&logo=windows&logoColor=white" alt="Windows için indir"></a>
+  <a href="https://github.com/mhmtcndsgn/Oskilo/releases/latest/download/Oskilo_macOS.dmg"><img src="https://img.shields.io/badge/%C4%B0ndir-macOS-000000?style=for-the-badge&logo=apple&logoColor=white" alt="macOS için indir"></a>
   <br>
-  <a href="https://github.com/mhmtcndsgn/Data-Logger/releases/latest"><img src="https://img.shields.io/github/v/release/mhmtcndsgn/Data-Logger?label=son%20s%C3%BCr%C3%BCm&style=flat-square" alt="Son sürüm"></a>
+  <a href="https://github.com/mhmtcndsgn/Oskilo/releases/latest"><img src="https://img.shields.io/github/v/release/mhmtcndsgn/Oskilo?label=son%20s%C3%BCr%C3%BCm&style=flat-square" alt="Son sürüm"></a>
   <img src="https://img.shields.io/badge/lisans-MIT-green?style=flat-square" alt="MIT lisansı">
 </p>
 
-![Data Logger](docs/ekran_deney.png)
+![Oskilo](docs/ekran_deney.png)
 
 ---
 
@@ -29,17 +30,19 @@
 
 - **Sıfır veri kaybı.** Okuma ayrı bir thread'de çalışır, diske ya da ekrana hiç beklemez. Bu yüzden yüksek hızlı toplu gönderimler de (örneğin 921600 baud'da gönderilen bir DMA tamponu) eksiksiz gelir. 300.000 satırlık tek parça aktarımla, saniyede yaklaşık 125.000 satır hızında test edildi.
 - **Kayıp tespiti.** Kart sıra numarası ve `START,N` / `END,N` gönderirse kaybolan her satır sayılır ve grafikte kırmızıyla gösterilir.
+- **İkili (CRC) veri biçimi:** metne göre 2–4 kat az bayt; kabloda bozulan çerçeve CRC16 ile ayıklanıp sayılır, kayda girmez. STM32 ve Arduino için hazır gönderme kodu ([`oskilo_ikili.h`](firmware_ornek/oskilo_ikili.h)).
 - **İki mod**
   - **Canlı izleme:** veriler geldikçe grafikte akar.
   - **Deney aktarımı:** kart deneyi belleğe kaydeder ve sonunda topluca gönderir. Uygulama aktarımın bittiğini anlar, otomatik kaydeder ve sonraki deneyi bekler.
 - **Excel, CSV ya da TXT.** Excel dosyasında özet sayfası (bütünlük, min/max/ortalama), veriler ve grafik bulunur. Ayrıca gelen her baytın ham yedeği tutulur.
-- **Hızlı canlı grafik:** zoom, kaydırma ve PNG olarak kaydetme. 1 milyon nokta yaklaşık 1 saniyede çizilir.
+- **Hızlı canlı grafik:** zoom, kaydırma ve PNG olarak kaydetme. 1 milyon nokta yaklaşık 1 saniyede çizilir. Görünüm verinin dışına kaçmaz; sadece terminali okumak isterseniz grafik tek tıkla gizlenir.
 - **Analiz araçları**
   - **📏 Ölçüm imleçleri:** iki dikey çizgi (A/B); aradaki süre (Δ), frekans (1/Δ) ve her kanalın değer farkı.
   - **📊 FFT:** grafikte görünen aralığın frekans spektrumu ve her kanalın tepe frekansı.
   - **Canlı istatistik:** görünen aralık için son / min / max / ortalama / RMS / std. sapma / tepe frekansı.
   - **Birim dönüşümü:** kanal başına çarpan, ofset ve birim (örn. ADC sayısı → Volt, tek tıkla ADC yardımcısı). Grafik, istatistik ve Excel/CSV çıktısı dönüştürülmüş değerleri kullanır.
 - **📝 Notlar:** kayıt sırasında **Ctrl+M** ile o ana not düşün (örn. "motor açıldı"). Not grafikte işaretlenir, Excel/CSV'de *Not* sütununa yazılır ve **Notlar** sekmesinde listelenir.
+- **🔔 Eşik alarmları:** kanal eşiği aşınca uyarı bandı, grafikte eşik çizgisi ve o satıra otomatik not; istenirse ses ve karta komut (örn. `STOP`). Geri dönüş payı sayesinde eşik etrafında titreyen sinyal alarm yağdırmaz.
 - **Kart tanıma:** STM32 (ST-Link), Arduino, ESP32, CH340, CP2102, FTDI ve Raspberry Pi Pico portları ★ ile işaretlenir.
 - **Karta komut gönderme** (örneğin yeni aktarım istemek için `GONDER`), yazı ya da **HEX bayt** olarak; **↑ / ↓** ile önceki komutlar geri gelir. **HEX görünüm** ham baytları gösterir.
 - **Hızlı komut butonları:** sık gönderdiğiniz komutları buton yapın; istenirse belirli aralıkla tekrar gönderilir (örn. her 2 s'de `OKU`).
@@ -47,7 +50,8 @@
 - **Kayıt yanlışlıkla kaybolmaz:** Kaydedilmemiş veri varken kapatırken / yeniden bağlanırken / dosya açarken sorar; dosyaları yarım kalmayacak şekilde yazar; çok uzun canlı kayıtları bellek dolmasın diye her 1 milyon satırda böler.
 - **Uzun testlere hazır (günler, haftalar):** Canlı izlemede kayıt seçtiğiniz aralıkla (varsayılan 5 dakikada bir) aynı dosyaya yazılır, **Şimdi kaydet** hemen yazar, bağlıyken bilgisayar uykuya geçmez, disk dolmak üzereyse uyarı bandı çıkar.
 - **Kısayollar:** F5 bağlan/kes · Ctrl+S şimdi kaydet · Ctrl+Shift+S farklı kaydet · Ctrl+O dosya aç · Ctrl+L terminali temizle · Ctrl+M not ekle · F1 kılavuz.
-- **Renkli temalar:** Koyu, açık ya da Windows'a uyan. *Nötr* gri ya da altı renk (mavi, pembe, mor, yeşil, turuncu, turkuaz); renk seçince tüm ekran o tonu alır.
+- **Renkli temalar:** Koyu, açık ya da Windows'a uyan. Varsayılan *Oskilo* (lacivert + turkuaz), *Nötr* gri ya da altı renk (mavi, pembe, mor, yeşil, turuncu, turkuaz); renk seçince tüm ekran, Windows 11'de başlık çubuğu ve uyarı pencereleri de o tonu alır.
+- **Sade ekran:** soldaki kartlar başlığa tıklayınca katlanır, katlıyken kısa özet gösterir; *Bağlan* ve *Şimdi kaydet* düğmeleri görünür kalır.
 - **Türkçe / İngilizce** arayüz, ayarlar hatırlanır (bir sorun olursa *? → Ayarları sıfırla*).
 - **DEMO portu:** kart olmadan her şeyi deneyebilirsiniz.
 - **Resimli kullanım kılavuzu** (Türkçe / İngilizce): **?** butonu ya da **F1**. Aynı menüde *Güncellemeleri kontrol et*, *Hata bildir / öneri* ve *Hakkında* da var.
@@ -63,18 +67,18 @@
 ## ⬇️ Kurulum
 
 ### Windows 10 / 11
-1. **[Data_Logger_Windows.zip](https://github.com/mhmtcndsgn/Data-Logger/releases/latest/download/Data_Logger_Windows.zip)** dosyasını indirin.
+1. **[Oskilo_Windows.zip](https://github.com/mhmtcndsgn/Oskilo/releases/latest/download/Oskilo_Windows.zip)** dosyasını indirin.
 2. **Zip'i açmadan önce** sağ tıklayın → **Özellikler** → alttaki **Engellemeyi kaldır** kutusunu işaretleyin → **Tamam**.
    *Böylece "Bu dosyayı çalıştırmak istiyor musunuz?" / SmartScreen uyarısı çıkmaz. Uygulama henüz dijital olarak imzalı değil (bkz. [Kod imzalama](#-kod-imzalama-politikası)). Bu adımı atlarsanız uygulama ilk açılışta etiketi kendisi kaldırmayı teklif eder; uyarı sadece bir kez çıkar.*
-3. Zip'i çıkarın ve **`Data_Logger.exe`**'yi çalıştırın. Exe yanındaki `_internal` klasörüyle birlikte durmalı.
+3. Zip'i çıkarın ve **`Oskilo.exe`**'yi çalıştırın. Exe yanındaki `_internal` klasörüyle birlikte durmalı.
 
 ### macOS (Apple Silicon, M1 ve sonrası)
-1. **[Data_Logger_macOS.dmg](https://github.com/mhmtcndsgn/Data-Logger/releases/latest/download/Data_Logger_macOS.dmg)** dosyasını indirin, uygulamayı **Applications** klasörüne sürükleyin.
+1. **[Oskilo_macOS.dmg](https://github.com/mhmtcndsgn/Oskilo/releases/latest/download/Oskilo_macOS.dmg)** dosyasını indirin, uygulamayı **Applications** klasörüne sürükleyin.
 2. İlk açılış: uygulamayı bir kez açmayı deneyin, sonra **Sistem Ayarları → Gizlilik ve Güvenlik** sayfasında **Yine de Aç**'a basın (eski macOS'ta: uygulamaya sağ tık → **Aç**).
 
 ### İndirmeyi doğrulama (isteğe bağlı)
-- Dosyanın SHA-256 değerini sürüm sayfasındaki `SHA256SUMS.txt` ile karşılaştırın: PowerShell'de `Get-FileHash Data_Logger_Windows.zip`, macOS'ta `shasum -a 256 Data_Logger_macOS.dmg`.
-- Bu reponun GitHub Actions'ında derlendiğini kontrol edin: `gh attestation verify Data_Logger_Windows.zip -R mhmtcndsgn/Data-Logger`
+- Dosyanın SHA-256 değerini sürüm sayfasındaki `SHA256SUMS.txt` ile karşılaştırın: PowerShell'de `Get-FileHash Oskilo_Windows.zip`, macOS'ta `shasum -a 256 Oskilo_macOS.dmg`.
+- Bu reponun GitHub Actions'ında derlendiğini kontrol edin: `gh attestation verify Oskilo_Windows.zip -R mhmtcndsgn/Oskilo`
 
 ---
 
@@ -82,7 +86,7 @@
 
 1. Portu seçin (tanınan kartlar ★ ile işaretlidir) ve kart koduyla aynı baud hızını ayarlayın.
 2. **Canlı izleme** ya da **Deney aktarımı** modunu seçip **Bağlan**'a basın.
-3. Dosyalar varsayılan olarak `Belgeler\Data Logger` klasörüne kaydedilir. **Kayıtlı dosyayı aç…** ile eski kayıtlar (v1 dosyaları dahil) yeniden açılabilir.
+3. Dosyalar varsayılan olarak `Belgeler\Oskilo` klasörüne kaydedilir. **Kayıtlı dosyayı aç…** ile eski kayıtlar (v1 dosyaları dahil) yeniden açılabilir.
 
 ---
 
@@ -112,6 +116,12 @@ END,4000
 Hazır örnekler:
 - **STM32 (HAL):** [`firmware_ornek/veri_gonder.c`](firmware_ornek/veri_gonder.c): timer tetiklemeli ADC + DMA + UART gönderimi
 - **Arduino / ESP32 / ESP8266:** [`firmware_ornek/arduino_ornek/arduino_ornek.ino`](firmware_ornek/arduino_ornek/arduino_ornek.ino): canlı mod ya da `GONDER` komutuyla deney aktarımı
+- **İkili (CRC) biçim, her kart:** [`firmware_ornek/oskilo_ikili.h`](firmware_ornek/oskilo_ikili.h) (tek dosya) ve Arduino örneği [`firmware_ornek/arduino_ikili/arduino_ikili.ino`](firmware_ornek/arduino_ikili/arduino_ikili.ino). Uygulamada *Bağlantı → Veri biçimi → İkili (CRC)* seçin.
+
+  ```
+  A5 5A | tip | kanal sayısı | sıra no (uint32) | değerler | CRC16 (CCITT-FALSE)
+  tip: 0x01 uint16 · 0x02 int16 · 0x03 uint32 · 0x04 int32 · 0x05 float32 · 0xF0 START · 0xF1 END
+  ```
 
 > ⚠️ **STM32 kullananlar:** ADC'nin DMA'sı **Circular** modda çalışırken gönderim yaparsanız tampon başa dönüp eski verinin üzerine yazar. Bu da verilerin "kayması" gibi görünür. **Normal** modu kullanın ve göndermeden önce `HAL_ADC_Stop_DMA` çağırın.
 
@@ -128,8 +138,8 @@ Windows'ta **`baslat.bat`** dosyasına çift tıklamanız da yeterli; ilk seferd
 Testler: `pip install pytest && python -m pytest tests`
 
 ### Yeni sürüm yayınlamak
-1. `stm32logger/__init__.py` içindeki `__version__` değerini ayarlayın (örn. `2.1.0`).
-2. **Actions → Build Data Logger → Run workflow**'a tıklayın, sürüm kutusuna aynı sürümü başında `v` ile yazın (örn. `v2.1.0`) ve **Run**'a basın.
+1. `stm32logger/__init__.py` içindeki `__version__` değerini ayarlayın (örn. `3.0.0`).
+2. **Actions → Build Oskilo → Run workflow**'a tıklayın, sürüm kutusuna aynı sürümü başında `v` ile yazın (örn. `v3.0.0`) ve **Run**'a basın.
 
 Windows ve macOS sürümleri otomatik test edilip `SHA256SUMS.txt` ve derleme kanıtıyla birlikte **Releases**'a eklenir. Yukarıdaki indirme butonları her zaman en son sürümü indirir. İki sürüm numarası farklıysa iş akışı yayınlamayı reddeder.
 

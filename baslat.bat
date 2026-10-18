@@ -1,5 +1,5 @@
 @echo off
-REM Data Logger - kaynak koddan calistirma (Windows)
+REM Oskilo - kaynak koddan calistirma (Windows)
 REM Ilk calistirmada sanal ortam kurar ve kutuphaneleri indirir (1-2 dk).
 cd /d "%~dp0"
 
