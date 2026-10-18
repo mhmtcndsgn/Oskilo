@@ -1,5 +1,5 @@
 /*
- * Data Logger — STM32 tarafı örnek kod (HAL)
+ * Oskilo — STM32 tarafı örnek kod (HAL), metin biçimi
  * ====================================================
  *
  * Akış:
