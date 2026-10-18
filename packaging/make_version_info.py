@@ -21,12 +21,12 @@ VSVersionInfo(
   kids=[
     StringFileInfo([StringTable('040904B0', [
       StringStruct('CompanyName', 'mhmtcndsgn'),
-      StringStruct('FileDescription', 'Data Logger - serial data logger for STM32, Arduino, ESP32'),
+      StringStruct('FileDescription', 'Oskilo - serial data logger for STM32, Arduino, ESP32'),
       StringStruct('FileVersion', '{version}'),
-      StringStruct('InternalName', 'Data_Logger'),
+      StringStruct('InternalName', 'Oskilo'),
       StringStruct('LegalCopyright', 'Copyright (c) 2026 Mehmet Can. MIT License.'),
-      StringStruct('OriginalFilename', 'Data_Logger.exe'),
-      StringStruct('ProductName', 'Data Logger'),
+      StringStruct('OriginalFilename', 'Oskilo.exe'),
+      StringStruct('ProductName', 'Oskilo'),
       StringStruct('ProductVersion', '{version}')])]),
     VarFileInfo([VarStruct('Translation', [1033, 1200])])
   ]

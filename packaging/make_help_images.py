@@ -7,7 +7,7 @@ Arayüz değiştiğinde çalıştırın:
 Ekran olmadan da çalışır (QT_QPA_PLATFORM=offscreen). Kılavuz görselleri 2 kat çözünürlükte
 üretilir; uygulama bunları ekranın ölçeğine göre pürüzsüz küçültür (pikselleşmez).
 Numaralı sarı rozetler kılavuz metnindeki numaralarla aynı sıradadır (bkz. stm32logger/help.py).
-Not: Bu betik bilgisayardaki Data Logger ayarlarını sıfırlar.
+Not: Bu betik bilgisayardaki Oskilo ayarlarını sıfırlar.
 """
 import math
 import os
@@ -21,11 +21,11 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
 sys.argv.append("--no-first-run")
 
-from PySide6.QtCore import QPoint, QRect, QRectF, QSettings, Qt  # noqa: E402
+from PySide6.QtCore import QPoint, QRect, QRectF, Qt  # noqa: E402
 from PySide6.QtGui import QBrush, QColor, QFont, QPainter, QPen  # noqa: E402
 from PySide6.QtWidgets import QApplication  # noqa: E402
 
-from stm32logger import ORG_NAME  # noqa: E402
+from stm32logger.system import app_settings, reset_settings  # noqa: E402
 from stm32logger.engine import DEMO_PORT  # noqa: E402
 from stm32logger.parser import parse_line  # noqa: E402
 from stm32logger.session import Session  # noqa: E402
@@ -33,7 +33,7 @@ from stm32logger.session import Session  # noqa: E402
 ACCENT = QColor("#e3b341")
 OUT = os.path.join(ROOT, "assets", "help")
 DOCS = os.path.join(ROOT, "docs")
-WIN_FOLDER = r"C:\Users\user\Documents\Data Logger"
+WIN_FOLDER = r"C:\Users\user\Documents\Oskilo"
 
 
 def pump(app, sec):
@@ -136,10 +136,10 @@ def lossy_session(w) -> Session:
 def make(lang: str, app) -> None:
     from stm32logger.ui.main_window import MainWindow
 
-    st = QSettings(ORG_NAME, "DataLogger")
+    st = app_settings()
     st.clear()
     st.setValue("theme_mode", "dark")
-    st.setValue("accent", "neutral")
+    st.setValue("accent", "oskilo")
     w = MainWindow()
     w._ask = lambda *a: "alt"          # kapanışta "kaydedilmemiş veri" sorusu çıkmasın
     w.lang_cb.setCurrentIndex(0 if lang == "tr" else 1)
@@ -197,7 +197,8 @@ def make(lang: str, app) -> None:
     qbtns = list(w._qc_buttons) + [w._qc_add]
     marks = [wrect(w, w.x_cb), wrect(w, w.win_cb), wrect(w, w.btn_fit), wrect(w, w.btn_png),
              scene_rect(w, w.plot, w.legend), union(wrect(w, w.chk_hex), wrect(w, w.btn_clear)),
-             union(*[wrect(w, b) for b in qbtns]), union(wrect(w, w.send_edit), wrect(w, w.btn_send))]
+             union(*[wrect(w, b) for b in qbtns]), union(wrect(w, w.send_edit), wrect(w, w.btn_send)),
+             union(wrect(w, w.btn_plot_toggle), wrect(w, w.plot_hdr.title))]
     annotate(pix, numbered(marks), crop, os.path.join(d, "chart.png"))
 
     # --- analysis: imleç + FFT + not + istatistik
@@ -227,26 +228,55 @@ def make(lang: str, app) -> None:
     w.btn_fft.setChecked(False)
     w.tabs.setCurrentIndex(0)
     s.notes.clear()
+
+    # --- alarms: eşik çizgisi + uyarı bandı + otomatik not, ve alarm penceresi
+    from stm32logger.ui.tools import AlarmsDialog
+
+    ch1, ch2 = s.channels[0], s.channels[1]
+    w._alarms = [{"on": True, "ch": ch1, "op": ">", "value": 3200.0, "hyst": 200.0, "beep": True, "cmd": "STOP"},
+                 {"on": True, "ch": ch2, "op": "<", "value": 1600.0, "hyst": 50.0, "beep": False, "cmd": ""}]
+    row = next(i for i, v in enumerate(s.cols[1]) if v < 1600)
+    w._fire_alarm(1, w._alarms[1], s, row, float(s.cols[1][row]), s.t_host[row], 1)
+    w._alarm_sig = None
+    w._plot_sig = None
+    w._update_plot()
+    pump(app, 0.4)
+    pix = grab(w)
+    crop = union(wrect(w, w.banner), wrect(w, plot_panel)).adjusted(-8, -8, 8, 8)
+    note_lbl = next(iter(w._note_items.values())).label
+    marks = [wrect(w, w.banner), scene_rect(w, w.plot, w._alarm_lines[1].label), scene_rect(w, w.plot, note_lbl)]
+    annotate(pix, numbered(marks), crop, os.path.join(d, "alarms.png"))
+    dlg = AlarmsDialog(w, lang, [ch1, ch2], w._alarms, {})
+    dlg.resize(900, 300)
+    dlg.show()
+    pump(app, 0.4)
+    dp = dlg.grab()
+    annotate(dp, [], QRect(0, 0, dlg.width(), dlg.height()), os.path.join(d, "alarms_dlg.png"))
+    dlg.close()
+    w._alarms = []
+    w._alarm_sig = None
+    w.banner.hide()
+    s.notes.clear()
     w._plot_sig = None
     w.resize(1360, 860)
     pump(app, 0.3)
 
     # --- connect + saving: yan panel tamamı görünsün diye pencereyi uzat
-    w.resize(1360, 1400)
+    w.resize(1360, 1500)
     pump(app, 0.5)
     pix = grab(w)
     crop = union(wrect(w, w.card_conn), wrect(w, w.card_data)).adjusted(-10, -10, 10, 10)
     marks = [wrect(w, w.port_cb), wrect(w, w.btn_refresh), wrect(w, w.baud_cb), wrect(w, w.seg_mode),
-             wrect(w, w.chk_reconnect), wrect(w, w.btn_connect), wrect(w, w.fs_spin), wrect(w, w.seq_cb),
-             wrect(w, w.idle_spin), wrect(w, w.btn_units)]
+             wrect(w, w.seg_dfmt), wrect(w, w.chk_reconnect), wrect(w, w.btn_connect), wrect(w, w.fs_spin),
+             wrect(w, w.seq_cb), wrect(w, w.idle_spin), wrect(w, w.btn_units), wrect(w, w.btn_alarms)]
     annotate(pix, numbered(marks), crop, os.path.join(d, "connect.png"))
 
     pix = grab(w)
     crop = wrect(w, w.card_save).adjusted(-10, -10, 10, 10)
     marks = [wrect(w, w.seg_fmt), union(wrect(w, w.folder_edit), wrect(w, w.btn_browse)), wrect(w, w.prefix_edit),
              wrect(w, w.chk_auto), union(wrect(w, w.lbl_every), wrect(w, w.every_cb)), wrect(w, w.chk_raw),
-             wrect(w, w.btn_save_quick), wrect(w, w.btn_save_as), wrect(w, w.btn_open_folder),
-             wrect(w, w.btn_open_saved)]
+             wrect(w, w.btn_open_folder), wrect(w, w.btn_open_saved),
+             wrect(w, w.btn_save_quick), wrect(w, w.btn_save_as)]
     annotate(pix, numbered(marks), crop, os.path.join(d, "saving.png"))
 
     # --- trouble: kayıplı bir aktarım
@@ -292,7 +322,7 @@ def main():
     for lang in ("tr", "en"):
         print(lang)
         make(lang, app)
-    QSettings(ORG_NAME, "DataLogger").clear()
+    reset_settings(app_settings())
 
 
 if __name__ == "__main__":
