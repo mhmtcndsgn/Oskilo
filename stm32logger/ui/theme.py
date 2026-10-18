@@ -1,4 +1,4 @@
-"""Tema: koyu / açık zemin + renk (nötr gri ya da mavi, pembe, mor, yeşil, turuncu, turkuaz).
+"""Tema: koyu / açık zemin + renk (Oskilo, nötr gri ya da mavi, pembe, mor, yeşil, turuncu, turkuaz).
 
 Renk seçilince sadece butonlar değil bütün ekran (zemin, kartlar, grafik, terminal) o rengin
 tonlarına boyanır; "nötr" klasik gri görünümdür.
@@ -39,6 +39,7 @@ BASES = {
 
 # Renk paletleri: (buton/seçili, üzerine gelince, yazı-koyu zemin, yazı-açık zemin)
 ACCENTS = {
+    "oskilo": ("#137f8b", "#1a93a0", "#7fd8de", "#0d6f7a"),   # logo renkleri: lacivert zemin, turkuaz vurgu
     "neutral": ("#1f6feb", "#388bfd", "#58a6ff", "#0969da"),   # gri zemin, mavi vurgu
     "blue":   ("#1f6feb", "#388bfd", "#58a6ff", "#0969da"),
     "pink":   ("#db2777", "#ec4899", "#f472b6", "#be185d"),
@@ -48,12 +49,17 @@ ACCENTS = {
     "teal":   ("#0891b2", "#06b6d4", "#22d3ee", "#0e7490"),
 }
 
+# Zemin tonu vurgu renginden farklı olan paletler (Oskilo: zemin logonun laciverti)
+BASE_HUE = {"oskilo": "#1f3d72"}
+BRAND_CORAL = "#ff6b5a"
+
 # Sabit durum renkleri (iki zeminde de okunur)
 GREEN, GREEN_HI = "#238636", "#2ea043"
 RED, RED_HI = "#b62324", "#da3633"
 
 MODE = "dark"
-ACCENT_NAME = "neutral"
+ACCENT_NAME = "oskilo"
+DEFAULT_ACCENT = "oskilo"
 
 
 def _hsl(h: float, s: float, l: float) -> str:
@@ -67,7 +73,7 @@ def _rgb(hexcol: str) -> tuple[int, int, int]:
 
 def tinted_base(accent: str, mode: str) -> dict:
     """Seçilen rengin tonlarından zemin paleti (yazılar her renkte okunur kalacak kontrastta)."""
-    r, g, b = _rgb(ACCENTS[accent][2])
+    r, g, b = _rgb(BASE_HUE.get(accent, ACCENTS[accent][2]))
     h = colorsys.rgb_to_hls(r / 255, g / 255, b / 255)[0]
     base = dict(BASES[mode])
     if mode == "dark":
@@ -87,11 +93,11 @@ def tinted_base(accent: str, mode: str) -> dict:
     return base
 
 
-def apply(mode: str = "dark", accent: str = "neutral") -> None:
+def apply(mode: str = "dark", accent: str = DEFAULT_ACCENT) -> None:
     """mode: "dark" | "light" (system önceden çözülmüş olmalı)."""
     global MODE, ACCENT_NAME, BLUE, BLUE_HI, BLUE_TXT, ACCENT, ACCENT_HI, ACCENT_TXT, SERIES
     MODE = mode if mode in BASES else "dark"
-    ACCENT_NAME = accent if accent in ACCENTS else "neutral"
+    ACCENT_NAME = accent if accent in ACCENTS else DEFAULT_ACCENT
     g = globals()
     base = BASES[MODE] if ACCENT_NAME == "neutral" else tinted_base(ACCENT_NAME, MODE)
     for k, v in base.items():
@@ -123,7 +129,7 @@ def resolve_mode(mode: str) -> str:
     return "dark"
 
 
-apply("dark", "neutral")
+apply("dark", DEFAULT_ACCENT)
 
 _QSS = """
 * {{ outline: 0; }}
@@ -132,7 +138,8 @@ QToolTip {{ background: {BG_RAISED}; color: {TEXT}; border: 1px solid {BORDER}; 
 
 #Header {{ background: {BG}; border-bottom: 1px solid {BORDER}; }}
 #TitleBlue {{ color: {ACCENT_TXT}; font-size: 18pt; font-weight: 700; background: transparent; }}
-#TitleMain {{ color: {TEXT}; font-size: 18pt; font-weight: 700; background: transparent; }}
+#TitleMain {{ color: {TEXT}; font-size: 19pt; font-weight: 700; letter-spacing: -0.5px; background: transparent; }}
+#Tagline {{ color: {MUTED}; font-size: 8.5pt; font-weight: 600; letter-spacing: 1.5px; background: transparent; padding-top: 7px; }}
 #Version {{ color: {FAINT}; font-size: 9pt; background: transparent; }}
 
 #Sidebar, #SidebarInner {{ background: {BG}; }}
@@ -141,6 +148,12 @@ QScrollArea {{ border: none; background: {BG}; }}
 #Card {{ background: {BG_PANEL}; border: 1px solid {BORDER}; border-radius: 10px; }}
 #Card QLabel, #Card QCheckBox {{ background: transparent; }}
 #CardTitle {{ font-weight: 700; font-size: 10.5pt; color: {TEXT}; padding-bottom: 2px; }}
+#CardHead {{ background: transparent; }}
+#CardSummary {{ color: {MUTED}; font-size: 8.5pt; padding-bottom: 2px; }}
+#CardChevron {{ color: {MUTED}; font-size: 10pt; padding-bottom: 2px; }}
+#CardBody {{ background: transparent; }}
+QToolButton#Chevron {{ background: transparent; border: none; color: {MUTED}; font-size: 11pt; padding: 0 4px 0 0; }}
+QToolButton#Chevron:hover {{ color: {ACCENT_TXT}; }}
 #FieldLabel {{ color: {MUTED}; font-size: 9pt; }}
 #Hint {{ color: {FAINT}; font-size: 8.5pt; }}
 

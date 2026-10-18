@@ -5,27 +5,29 @@ import collections
 import datetime as _dt
 import html
 import json
+import math
 import os
 import queue
 import shutil
 import sys
 import threading
+import weakref
 import time
 from bisect import bisect_left
 from pathlib import Path
 
 import numpy as np
 import pyqtgraph as pg
-from PySide6.QtCore import QEvent, QEventLoop, QSettings, QStandardPaths, Qt, QTimer, QUrl
+from PySide6.QtCore import QEvent, QEventLoop, QObject, QRectF, QStandardPaths, Qt, QTimer, QUrl
 from PySide6.QtGui import (QAction, QActionGroup, QColor, QDesktopServices, QFont, QFontDatabase, QGuiApplication,
                            QIcon, QIntValidator, QKeySequence, QPainter, QPixmap, QTextCharFormat, QTextCursor)
 from PySide6.QtWidgets import (QApplication, QCheckBox, QComboBox, QDoubleSpinBox, QFileDialog, QFrame,
                                QHBoxLayout, QHeaderView, QInputDialog, QLabel, QLineEdit, QListWidget,
                                QMainWindow, QMenu, QMessageBox, QPlainTextEdit, QProgressBar, QProgressDialog,
                                QPushButton, QScrollArea, QSplitter, QTableWidget, QTableWidgetItem, QTabWidget,
-                               QVBoxLayout, QWidget)
+                               QToolButton, QVBoxLayout, QWidget)
 
-from .. import APP_NAME, ORG_NAME, __version__
+from .. import APP_NAME, __version__
 from .. import analysis, system
 from ..engine import DEMO_PORT, Engine, list_ports, open_port
 from ..exporter import FORMATS, default_filename, export_session
@@ -33,7 +35,7 @@ from ..i18n import T
 from ..session import Session, clean_note
 from . import theme as th
 from ..analysis import parse_hex, sanitize_cmds
-from .tools import QuickCmdDialog, UnitsDialog
+from .tools import AlarmsDialog, QuickCmdDialog, UnitsDialog
 from .widgets import Card, PanelHeader, Segmented, Tile, guard_wheel, hint_label, hrow
 
 ASSETS = Path(__file__).resolve().parent.parent.parent / "assets"
@@ -83,10 +85,61 @@ def _fmt_int(n: int) -> str:
     return f"{n:,}".replace(",", ".")
 
 
+ALARM_NOTE_MAX = 300                 # bir kayda en fazla bu kadar alarm notu düşülür
+
+
+class _TitleBars(QObject):
+    """Windows'ta açılan her pencerenin (ana pencere, uyarılar, diyaloglar) başlık çubuğunu
+    tema rengine boyar."""
+
+    def eventFilter(self, obj, ev) -> bool:
+        if ev.type() == QEvent.Show and obj.isWidgetType() and obj.isWindow():
+            style_title_bar(obj)
+        return False
+
+
+def style_title_bar(w) -> None:
+    if sys.platform != "win32":
+        return
+    kind = w.windowFlags() & Qt.WindowType_Mask
+    if kind not in (Qt.Window, Qt.Dialog):
+        return
+    try:
+        system.set_title_bar(int(w.winId()), th.BG, th.TEXT, th.BORDER, th.MODE == "dark")
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def status_icon(kind: str, size: int = 44) -> QPixmap:
+    """Uyarı pencereleri için tema renginde simge (Windows'un mavi 'i' simgesi yerine)."""
+    color, glyph = {"error": (th.RED_HI, "×"), "warn": ("#d29922", "!"),
+                    "question": (th.ACCENT, "?")}.get(kind, (th.ACCENT, "i"))
+    dpr = QGuiApplication.primaryScreen().devicePixelRatio() if QGuiApplication.primaryScreen() else 1.0
+    pm = QPixmap(int(size * dpr), int(size * dpr))
+    pm.setDevicePixelRatio(dpr)
+    pm.fill(Qt.transparent)
+    p = QPainter(pm)
+    p.setRenderHint(QPainter.Antialiasing)
+    p.setPen(Qt.NoPen)
+    p.setBrush(QColor(color))
+    p.drawEllipse(QRectF(1, 1, size - 2, size - 2))
+    f = QFont()
+    f.setBold(True)
+    f.setPixelSize(int(size * (0.62 if glyph == "×" else 0.56)))
+    p.setFont(f)
+    p.setPen(QColor("#ffffff"))
+    p.drawText(QRectF(0, -1, size, size), Qt.AlignCenter, glyph)
+    p.end()
+    return pm
+
+
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.settings = QSettings(ORG_NAME, "DataLogger")
+        self.settings = system.app_settings()
+        if sys.platform == "win32":          # başlık çubukları tema renginde (Windows 11; Windows 10'da koyu/açık)
+            self._title_bars = _TitleBars(self)
+            QApplication.instance().installEventFilter(self._title_bars)
         self.lang = self._sv("lang", "tr")
         if self.lang not in ("tr", "en"):
             self.lang = "tr"
@@ -118,6 +171,8 @@ class MainWindow(QMainWindow):
         self._last_plot = None          # analiz için son çizilen veri (x, birimli y'ler, adlar)
         self._cursor_lines: list = []
         self._note_items: dict = {}
+        self._plot_collapsed = False
+        self._cursor_ctx = None
         self._note_owner = None
         self._analysis_dur = 0.0
         self._qc_fail: dict[int, int] = {}
@@ -138,15 +193,29 @@ class MainWindow(QMainWindow):
             word = "GONDER" if self.lang == "tr" else "SEND"     # DEMO ve örnek kart kodu ikisini de anlar
             self._qcmds = [{"label": word, "cmd": word, "hex": False, "eol": "\r\n", "repeat": 0.0}]
         self._qc_timers: dict[int, QTimer] = {}
+        try:
+            self._alarms = analysis.sanitize_alarms(json.loads(self._sv("alarms", "[]")))
+        except ValueError:
+            self._alarms = []
+        self._alarm_armed: dict[int, bool] = {}
+        self._alarm_scanned = weakref.WeakKeyDictionary()   # oturum -> alarm için kontrol edilen satır sayısı
+        self._alarm_notes = weakref.WeakKeyDictionary()     # oturum -> eklenen alarm notu sayısı
+        self._alarm_pending: dict = {}       # (alarm, oturum) -> [sayı, etiket, son değer]: saniye sınırında bekleyen
+        self._alarm_fired_t: dict[int, tuple] = {}     # alarm -> (zaman, oturum ref)
+        self._alarm_lines: list = []
+        self._alarm_sig = None
 
         self._theme_mode = self._sv("theme_mode", "system")
         if self._theme_mode not in th.MODES:
             self._theme_mode = "system"
-        self._accent = self._sv("accent", "neutral")
+        self._accent = self._sv("accent", th.DEFAULT_ACCENT)
         if self._accent not in th.ACCENTS:
-            self._accent = "neutral"
+            self._accent = th.DEFAULT_ACCENT
         th.apply(th.resolve_mode(self._theme_mode), self._accent)
         QApplication.instance().setStyleSheet(th.build_qss(ASSETS))
+        for w in QApplication.topLevelWidgets():       # açık pencerelerin başlık çubukları da
+            if w.isVisible():
+                style_title_bar(w)
 
         self.setWindowTitle(APP_NAME)
         icon = ASSETS / "icon.png"
@@ -175,6 +244,8 @@ class MainWindow(QMainWindow):
         self._disk_low = False
         self.long_timer = QTimer(self, interval=15000, timeout=self._periodic)
         self.long_timer.start()
+        self.alarm_timer = QTimer(self, interval=100, timeout=self._check_alarms)
+        self.alarm_timer.start()
 
         self._help_dlg = None
         self._bg_q: queue.SimpleQueue = queue.SimpleQueue()
@@ -225,9 +296,9 @@ class MainWindow(QMainWindow):
         logo.setStyleSheet("background: transparent;")
         lay.addWidget(logo)
         self.lbl_title_a = QLabel()
-        self.lbl_title_a.setObjectName("TitleBlue")
+        self.lbl_title_a.setObjectName("TitleMain")
         self.lbl_title = QLabel()
-        self.lbl_title.setObjectName("TitleMain")
+        self.lbl_title.setObjectName("Tagline")
         lay.addWidget(self.lbl_title_a)
         lay.addWidget(self.lbl_title)
         lay.addStretch(1)
@@ -333,14 +404,20 @@ class MainWindow(QMainWindow):
         c.add(self.seg_mode)
         self.lbl_mode_hint = hint_label()
         c.add(self.lbl_mode_hint)
+        self.lbl_dfmt = c.label()
+        self.seg_dfmt = Segmented(["text", "binary"])
+        self.seg_dfmt.changed.connect(self._on_dfmt_changed)
+        c.add(self.seg_dfmt)
+        self.lbl_dfmt_hint = hint_label()
+        c.add(self.lbl_dfmt_hint)
         self.chk_reconnect = QCheckBox()
         c.add(self.chk_reconnect)
-        c.lay.addSpacing(6)
+        c.spacing(6)
         self.btn_connect = QPushButton()
         self.btn_connect.setObjectName("Primary")
         self.btn_connect.setCursor(Qt.PointingHandCursor)
         self.btn_connect.clicked.connect(self._toggle_connect)
-        c.add(self.btn_connect)
+        c.add_persistent(self.btn_connect)          # kart katlıyken de bağlan/kes düğmesi görünür
         col.addWidget(c)
 
         # --- Veri ayarları ---
@@ -365,10 +442,13 @@ class MainWindow(QMainWindow):
         self.idle_spin.setSuffix(" s")
         self.idle_spin.setButtonSymbols(QDoubleSpinBox.NoButtons)
         c.add(self.idle_spin)
-        c.lay.addSpacing(4)
+        c.spacing(4)
         self.btn_units = QPushButton()
         self.btn_units.clicked.connect(self._edit_units)
         c.add(self.btn_units)
+        self.btn_alarms = QPushButton()
+        self.btn_alarms.clicked.connect(self._edit_alarms)
+        c.add(self.btn_alarms)
         col.addWidget(c)
 
         # --- Kayıt ---
@@ -385,7 +465,7 @@ class MainWindow(QMainWindow):
         self.lbl_prefix = c.label()
         self.prefix_edit = QLineEdit()
         c.add(self.prefix_edit)
-        c.lay.addSpacing(4)
+        c.spacing(4)
         self.chk_auto = QCheckBox()
         self.chk_raw = QCheckBox()
         c.add(self.chk_auto)
@@ -396,25 +476,27 @@ class MainWindow(QMainWindow):
         c.add(self.every_cb)
         self.chk_auto.toggled.connect(lambda on: (self.every_cb.setEnabled(on), self.lbl_every.setEnabled(on)))
         c.add(self.chk_raw)
-        c.lay.addSpacing(4)
+        c.spacing(4)
         self.btn_save_quick = QPushButton()
         self.btn_save_quick.setObjectName("Accent")
         self.btn_save_quick.clicked.connect(self._save_now)
         self.btn_save_as = QPushButton()
         self.btn_save_as.clicked.connect(self._save_as)
-        row = QHBoxLayout()
-        row.setSpacing(6)
-        row.addWidget(self.btn_save_quick, 1)
-        row.addWidget(self.btn_save_as, 1)
-        c.add(row)
         self.btn_open_folder = QPushButton()
         self.btn_open_folder.clicked.connect(self._open_folder)
         c.add(self.btn_open_folder)
         self.btn_open_saved = QPushButton()
         self.btn_open_saved.clicked.connect(self._open_saved_file)
         c.add(self.btn_open_saved)
+        row = QHBoxLayout()
+        row.setSpacing(6)
+        row.addWidget(self.btn_save_quick, 1)
+        row.addWidget(self.btn_save_as, 1)
+        c.add_persistent(row)                       # katlıyken de "Şimdi kaydet" görünür
         col.addWidget(c)
         col.addStretch(1)
+        for card in (self.card_conn, self.card_data, self.card_save):
+            card.toggled.connect(self._save_collapsed)
 
         scroll.setWidget(inner)
         return scroll
@@ -480,6 +562,14 @@ class MainWindow(QMainWindow):
         v.setContentsMargins(12, 10, 12, 12)
         v.setSpacing(4)
         h = self.plot_hdr = PanelHeader()
+        self.btn_plot_toggle = QToolButton()
+        self.btn_plot_toggle.setObjectName("Chevron")
+        self.btn_plot_toggle.setText("▾")
+        self.btn_plot_toggle.setCursor(Qt.PointingHandCursor)
+        self.btn_plot_toggle.clicked.connect(lambda: self._set_plot_collapsed(not self._plot_collapsed))
+        h.lay.insertWidget(0, self.btn_plot_toggle)
+        h.title.setCursor(Qt.PointingHandCursor)
+        h.title.installEventFilter(self)
         self.lbl_x = h.add(QLabel())
         self.lbl_x.setObjectName("FieldLabel")
         self.x_cb = h.add(QComboBox())
@@ -508,7 +598,9 @@ class MainWindow(QMainWindow):
         self.legend.setVisible(False)
 
         # Analiz satırı: imleç, FFT, not
-        tools = QHBoxLayout()
+        self.plot_tools = QWidget()
+        tools = QHBoxLayout(self.plot_tools)
+        tools.setContentsMargins(0, 0, 0, 0)
         tools.setSpacing(6)
         self.btn_cursor = QPushButton()
         self.btn_cursor.setObjectName("Tool")
@@ -530,7 +622,7 @@ class MainWindow(QMainWindow):
         tools.addWidget(self.btn_note)
         tools.addSpacing(8)
         tools.addWidget(self.lbl_readout, 1)
-        v.addLayout(tools)
+        v.addWidget(self.plot_tools)
 
         self.fft_plot = pg.PlotWidget()
         fpi = self.fft_plot.getPlotItem()
@@ -543,7 +635,12 @@ class MainWindow(QMainWindow):
         self.plot_split.setSizes([300, 200])
         self._style_plot()
         v.addWidget(self.plot_split, 1)
+        self.plot_panel = panel
 
+        for cb in (pi.ctrl.logXCheck, pi.ctrl.logYCheck):     # log eksen açılıp kapanınca sınırlar yeniden
+            cb.toggled.connect(lambda *_: (self._invalidate_plot(), self._update_plot()))
+        for cb in (fpi.ctrl.logXCheck, fpi.ctrl.logYCheck):
+            cb.toggled.connect(lambda *_: self._apply_fft_limits())
         self._analysis_timer = QTimer(self, singleShot=True, interval=150, timeout=self._update_analysis)
         self.plot.getPlotItem().getViewBox().sigXRangeChanged.connect(lambda *_: self._analysis_timer.start())
         return panel
@@ -677,6 +774,9 @@ class MainWindow(QMainWindow):
         self.lbl_mode.setText(t("mode"))
         self.seg_mode.set_texts({"live": t("mode_live"), "dma": t("mode_dma")})
         self.lbl_mode_hint.setText(t("mode_" + self.seg_mode.value() + "_hint"))
+        self.lbl_dfmt.setText(t("dfmt"))
+        self.seg_dfmt.set_texts({"text": t("dfmt_text"), "binary": t("dfmt_binary")})
+        self.lbl_dfmt_hint.setText(t("dfmt_" + self.seg_dfmt.value() + "_hint"))
         self.chk_reconnect.setText(t("autoreconnect"))
         self.chk_reconnect.setToolTip(t("autoreconnect_tip"))
         self.btn_connect.setToolTip("F5")
@@ -724,6 +824,7 @@ class MainWindow(QMainWindow):
         self.tile_status.label.setText(t("st_status").upper())
 
         self.plot_hdr.title.setText(t("plot_title"))
+        self.btn_plot_toggle.setToolTip(t("plot_show" if self._plot_collapsed else "plot_hide"))
         self.lbl_x.setText(t("x_axis"))
         for i, k in enumerate(("x_auto", "x_sample", "x_time", "x_host")):
             self.x_cb.setItemText(i, t(k))
@@ -748,6 +849,7 @@ class MainWindow(QMainWindow):
         self.btn_note.setToolTip(t("note_tip") + "  (Ctrl+M)")
         self.btn_units.setText(t("units_btn"))
         self.btn_units.setToolTip(t("units_help"))
+        self._style_alarm_button()
         self.fft_plot.getPlotItem().setLabel("left", t("fft_y"))
         self._rebuild_quick()
         self._update_readout()
@@ -824,6 +926,9 @@ class MainWindow(QMainWindow):
     def _apply_theme(self, save: bool = True) -> None:
         th.apply(th.resolve_mode(self._theme_mode), self._accent)
         QApplication.instance().setStyleSheet(th.build_qss(ASSETS))
+        for w in QApplication.topLevelWidgets():       # açık pencerelerin başlık çubukları da
+            if w.isVisible():
+                style_title_bar(w)
         self._style_plot()
         for i, c in enumerate(self._curves.values()):   # yakınlaştırma korunur, sadece renkler değişir
             c.setPen(pg.mkPen(th.SERIES[i % len(th.SERIES)], width=1.6))
@@ -849,7 +954,7 @@ class MainWindow(QMainWindow):
     # ================================================================ AYARLAR
     def _default_folder(self) -> str:
         docs = QStandardPaths.writableLocation(QStandardPaths.DocumentsLocation) or str(Path.home())
-        return os.path.join(docs, "Data Logger")
+        return os.path.join(docs, "Oskilo")
 
     def _sv(self, key: str, default, kind=str):
         """Ayarı güvenle okur: bozuk/elle değiştirilmiş değer uygulamayı çökertmez."""
@@ -880,6 +985,8 @@ class MainWindow(QMainWindow):
         self.lbl_every.setEnabled(self.chk_auto.isChecked())
         self.chk_raw.setChecked(sv("raw", True, bool))
         self.chk_reconnect.setChecked(sv("reconnect", True, bool))
+        self.seg_dfmt.set_value("binary" if sv("data_format", "text") == "binary" else "text")
+        self._on_dfmt_changed(self.seg_dfmt.value())
         self.chk_hex.setChecked(sv("hex", False, bool))
         self.btn_fft.setChecked(sv("fft_on", False, bool))
         self.tabs.setCurrentIndex(max(0, min(2, sv("bottom_tab", 0, int))))
@@ -899,6 +1006,14 @@ class MainWindow(QMainWindow):
                 self.plot_split.restoreState(ps)
         except (TypeError, ValueError):
             pass
+        try:
+            col = json.loads(sv("collapsed", "{}"))
+            col = col if isinstance(col, dict) else {}
+        except (TypeError, ValueError):
+            col = {}
+        for key, card in self._cards().items():
+            card.set_collapsed(bool(col.get(key, False)))
+        self._set_plot_collapsed(bool(col.get("plot", False)), save=False)
 
     def _reset_settings(self) -> None:
         t = self.t
@@ -907,14 +1022,23 @@ class MainWindow(QMainWindow):
             return
         if self._ask(t("menu_reset"), t("reset_ask"), t("menu_reset")) is not True:
             return
-        self.settings.clear()
+        system.reset_settings(self.settings)
         self.settings.setValue("help_seen", "true")
         self.settings.setValue("unblock_asked", "true")
         self._history, self._hist_pos = [], 0
-        self._theme_mode, self._accent = "system", "neutral"
+        self._alarms, self._units = [], {}
+        self._alarm_armed, self._alarm_fired_t, self._alarm_pending = {}, {}, {}
+        self._alarm_sig = None
+        word = "GONDER" if self.lang == "tr" else "SEND"
+        self._qcmds = [{"label": word, "cmd": word, "hex": False, "eol": "\r\n", "repeat": 0.0}]
+        self._rebuild_quick()
+        self._style_alarm_button()
+        self._curve_owner = None
+        self._theme_mode, self._accent = "system", th.DEFAULT_ACCENT
         self._apply_theme(save=False)
         self._load_settings()
         self.resize(1360, 860)
+        self._set_plot_collapsed(False, save=False)
         self.splitter.setSizes([480, 260])
         self._set_lang("tr" if self.lang_cb.currentIndex() == 0 else "en")
         self._log(t("reset_done"), "ok")
@@ -934,17 +1058,21 @@ class MainWindow(QMainWindow):
         s.setValue("autosave_every", self.every_cb.currentData())
         s.setValue("raw", "true" if self.chk_raw.isChecked() else "false")
         s.setValue("reconnect", "true" if self.chk_reconnect.isChecked() else "false")
+        s.setValue("data_format", self._data_format)
         s.setValue("hex", "true" if self.chk_hex.isChecked() else "false")
         s.setValue("history", json.dumps(self._history[-HISTORY_MAX:], ensure_ascii=False))
         s.setValue("xaxis", self.x_cb.currentData())
         s.setValue("window", self.win_cb.currentData())
         s.setValue("eol", self.eol_cb.currentData())
         s.setValue("geometry", self.saveGeometry())
-        s.setValue("splitter", self.splitter.saveState())
+        if not self._plot_collapsed:           # gizliyken küçülmüş hâli değil, açık hâli hatırlansın
+            s.setValue("splitter", self.splitter.saveState())
+        s.setValue("collapsed", json.dumps(self._collapsed_state()))
         s.setValue("lang", self.lang)
         s.setValue("theme_mode", self._theme_mode)
         s.setValue("accent", self._accent)
         s.setValue("units", json.dumps(self._units, ensure_ascii=False))
+        s.setValue("alarms", json.dumps(self._alarms, ensure_ascii=False))
         s.setValue("quick_cmds", json.dumps(self._qcmds, ensure_ascii=False))
         s.setValue("fft_on", "true" if self.btn_fft.isChecked() else "false")
         s.setValue("bottom_tab", self.tabs.currentIndex())
@@ -996,6 +1124,16 @@ class MainWindow(QMainWindow):
         self.win_cb.setEnabled(mode == "live")
         self._plot_sig = None
 
+    @property
+    def _data_format(self) -> str:
+        return self.seg_dfmt.value() if hasattr(self, "seg_dfmt") else "text"
+
+    def _on_dfmt_changed(self, fmt: str) -> None:
+        self.lbl_dfmt_hint.setText(self.t("dfmt_" + fmt + "_hint"))
+        binary_on = fmt == "binary"
+        self.seq_cb.setEnabled(not binary_on and self.engine is None)   # ikili çerçevede sıra no hep var
+        self.lbl_seq.setEnabled(not binary_on)
+
     def _style_connect_button(self) -> None:
         on = self.engine is not None
         self.btn_connect.setText(("■  " + self.t("disconnect")) if on else ("▶  " + self.t("connect")))
@@ -1022,8 +1160,9 @@ class MainWindow(QMainWindow):
         except ValueError:
             baud = 115200
         mode = self.seg_mode.value()
+        dfmt = self._data_format
         try:
-            ser = open_port(port, baud, mode)
+            ser = open_port(port, baud, mode, binary=dfmt == "binary")
         except Exception as e:
             self._log(t("msg_open_err", err=e), "error")
             self._msg("error", t("err_title"), t("msg_open_err", err=e))
@@ -1034,27 +1173,31 @@ class MainWindow(QMainWindow):
         if self.chk_raw.isChecked():
             stamp = _dt.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
             safe_port = "".join(ch for ch in os.path.basename(port) if ch.isalnum()) or "port"
-            raw_path = os.path.join(folder, "ham", f"ham_{stamp}_{safe_port}.txt")
+            ext = ".bin" if dfmt == "binary" else ".txt"
+            raw_path = os.path.join(folder, "ham", f"ham_{stamp}_{safe_port}{ext}")
 
-        seq_mode = self.seq_cb.currentData()
+        seq_mode = "on" if dfmt == "binary" else self.seq_cb.currentData()
         prefix = t("channel_prefix")
         fs = self.fs_spin.value()
         port_name = "DEMO" if port == DEMO_PORT else port
 
         def factory():
-            return Session(mode=mode, seq_mode=seq_mode, channel_prefix=prefix,
-                           port=port_name, baud=baud, sample_rate=fs)
+            s = Session(mode=mode, seq_mode=seq_mode, channel_prefix=prefix,
+                        port=port_name, baud=baud, sample_rate=fs)
+            s.seq32 = dfmt == "binary"          # ikili çerçevede sıra no 32 bit
+            return s
 
         reopen = None
         if self.chk_reconnect.isChecked() and port != DEMO_PORT:
-            reopen = lambda: open_port(port, baud, mode)  # noqa: E731
+            reopen = lambda: open_port(port, baud, mode, binary=dfmt == "binary")  # noqa: E731
 
         self.engine = Engine(ser, mode=mode, session_factory=factory, raw_path=raw_path,
-                             idle_timeout=self.idle_spin.value(), reopen=reopen)
+                             idle_timeout=self.idle_spin.value(), reopen=reopen, data_format=dfmt)
         self.engine.hex_on = self.chk_hex.isChecked()
         self.engine.start()
         self._conn_t0 = time.time()
         self._conn_info = (port_name, baud, mode)
+        self._alarm_armed, self._alarm_fired_t, self._alarm_pending = {}, {}, {}
         self._rate.clear()
         self.view = self.engine.current
         self.banner.hide()
@@ -1064,6 +1207,8 @@ class MainWindow(QMainWindow):
         self._set_status_dot(True)
         self._update_status_text()
         self._log(t("msg_connected", port=port_name, baud=baud, mode=t("mode_" + mode)), "ok")
+        if dfmt == "binary":
+            self._log(t("msg_binary_on"), "muted")
         if raw_path:
             self._log(t("msg_raw", path=raw_path), "muted")
         self._check_disk(folder)
@@ -1115,9 +1260,11 @@ class MainWindow(QMainWindow):
         self._update_stats(force=True)
 
     def _set_controls_enabled(self, on: bool) -> None:
-        for w in (self.port_cb, self.btn_refresh, self.baud_cb, self.seg_mode, self.fs_spin,
+        for w in (self.port_cb, self.btn_refresh, self.baud_cb, self.seg_mode, self.seg_dfmt, self.fs_spin,
                   self.seq_cb, self.btn_open_saved, self.chk_raw, self.chk_reconnect):
             w.setEnabled(on)
+        if on and self._data_format == "binary":
+            self.seq_cb.setEnabled(False)
         self.idle_spin.setEnabled(on and self.seg_mode.value() == "dma")
         self.send_edit.setEnabled(not on)
         self.btn_send.setEnabled(not on)
@@ -1153,6 +1300,8 @@ class MainWindow(QMainWindow):
                     elif kind == "reconnected":
                         self._log(self.t("msg_reconnected"), "ok")
                         self._set_status_dot(True)
+                    elif kind == "skipped":
+                        self._log(self.t("msg_bin_skipped", n=msg), "warn")
                     elif kind == "raw_part":
                         self._log(self.t("msg_raw_part", path=msg), "muted")
                     elif kind == "error" and msg.startswith("raw:"):
@@ -1232,6 +1381,8 @@ class MainWindow(QMainWindow):
         try:
             while True:
                 s = eng.done_q.get_nowait()
+                self._alarm_scan_session(s, live=False)    # son satırlarına kadar (hızlı aktarımlar dahil)
+                self._alarm_scanned.pop(s, None)
                 if s.n > 0 or s.saw_start or s.bad_lines:
                     self._on_session_done(s)
         except queue.Empty:
@@ -1259,6 +1410,13 @@ class MainWindow(QMainWindow):
                 state = "bad"
         if s.dropped_channels:
             txt += "  ·  " + t("banner_dropped_ch")
+        if s.crc_errors:
+            txt += "  ·  " + t("banner_crc", c=_fmt_int(s.crc_errors))
+        n_alarm = self._alarm_notes.get(s, 0)
+        if n_alarm:
+            txt += "  ·  " + t("banner_alarms", n=_fmt_int(n_alarm))
+            if state == "ok":
+                state = "bad"
         self._log(txt, {"ok": "ok", "bad": "error"}.get(state, "info"))
         if s.finish_reason == "segment":
             self._log(t("msg_segment", n=_fmt_int(s.n)), "info")
@@ -1282,6 +1440,7 @@ class MainWindow(QMainWindow):
     # ================================================================ İSTATİSTİK
     def _update_stats(self, force: bool = False) -> None:
         t = self.t
+        self._refresh_summaries()
         s = self.view
         eng = self.engine
         n = s.n if s else 0
@@ -1366,6 +1525,9 @@ class MainWindow(QMainWindow):
     def _update_plot(self) -> None:
         s = self.view
         if s is None:
+            return
+        if self._plot_collapsed:                  # grafik gizliyken hiç çizilmez (işlemci rahatlar)
+            self._refresh_notes()
             return
         kind = self._x_kind(s)
         win = self.win_cb.currentData() if (s.mode == "live" and s.ended_at is None) else 0
@@ -1459,6 +1621,8 @@ class MainWindow(QMainWindow):
             m = min(len(x), len(y))
             c.setData(x[:m], y[:m])
         self.legend.setVisible(bool(self._curves))
+        thr = self._draw_alarm_lines(names)
+        self._apply_plot_limits(x_raw, conv_ys, thr)
         self._last_plot = {"x": x_raw, "ys": conv_ys, "names": labels, "kind": kind, "fs": fs_eff, "t": t_est,
                            "unit_x": "s" if kind in ("time", "host") else ""}
         self._draw_notes(notes, start, n, x_raw, s)
@@ -1470,6 +1634,246 @@ class MainWindow(QMainWindow):
                 time.perf_counter() - self._analysis_t > max(0.5, 5 * self._analysis_dur):
             self._update_analysis()
         self._update_readout()
+
+    # ================================================================ EŞİK ALARMLARI
+    def _style_alarm_button(self) -> None:
+        n = sum(1 for a in self._alarms if a["on"])
+        self.btn_alarms.setText(self.t("alarms_btn") + (f"  ({n})" if n else ""))
+        self.btn_alarms.setToolTip(self.t("alarms_help"))
+
+    def _edit_alarms(self) -> None:
+        chans = list(self.view.channels) if self.view is not None and not self.view.imported else []
+        if self.engine is not None:
+            chans = list(dict.fromkeys(chans + list(self.engine.current.channels)))
+        dlg = AlarmsDialog(self, self.lang, chans, self._alarms, self._units)
+        if dlg.exec():
+            self._alarms = dlg.result_alarms()
+            self._alarm_armed, self._alarm_fired_t, self._alarm_pending = {}, {}, {}
+            if self.engine is not None:              # yeni/açılan alarm geçmiş veriye bakmasın, buradan başlasın
+                cur = self.engine.current
+                self._alarm_scanned[cur] = cur.n
+            self.settings.setValue("alarms", json.dumps(self._alarms, ensure_ascii=False))
+            self._style_alarm_button()
+            self._alarm_sig = None
+            self._plot_sig = None
+
+    def _alarm_label(self, a: dict) -> str:
+        u = analysis.unit_of(self._units, a["ch"])
+        unit = f" {u['unit']}" if u and u.get("unit") else ""
+        return f"{a['ch']} {a['op']} {analysis.fmt(a['value'])}{unit}"
+
+    def _draw_alarm_lines(self, names) -> list[float]:
+        """Grafikte eşik çizgileri (kesikli kırmızı). Döndürür: çizilen eşik değerleri."""
+        act = [a for a in self._alarms if a["on"] and a["ch"] in names]
+        sig = (tuple((a["ch"], a["op"], a["value"]) for a in act), th.MODE, th.ACCENT_NAME)
+        if sig != self._alarm_sig:
+            self._alarm_sig = sig
+            for ln in self._alarm_lines:
+                self.plot.removeItem(ln)
+            self._alarm_lines = []
+            for a in act:
+                ln = pg.InfiniteLine(pos=a["value"], angle=0, movable=False,
+                                     pen=pg.mkPen(th.RED_TXT, width=1.4, style=Qt.DashLine),
+                                     label="⚠ " + self._alarm_label(a),
+                                     labelOpts={"position": 0.97, "color": th.RED_TXT, "fill": th.BG_PANEL,
+                                                "anchors": [(1, 1), (1, 1)]})
+                ln.setZValue(4)
+                self.plot.addItem(ln)
+                self._alarm_lines.append(ln)
+        return [a["value"] for a in act]
+
+    def _check_alarms(self) -> None:
+        """Gelen yeni örnekleri eşiklerle karşılaştırır (grafik gizliyken de çalışır)."""
+        eng = self.engine
+        if eng is not None:
+            self._drain_done(eng)                    # önce biten kayıtların son satırları (sıra korunur)
+            if self.engine is eng:
+                self._alarm_scan_session(eng.current, live=True)
+        self._flush_alarm_pending()
+
+    def _flush_alarm_pending(self, force: bool = False) -> None:
+        """Saniye sınırı yüzünden ayrıca yazılmayan tetikleri tek satırda özetler."""
+        if not self._alarm_pending:
+            return
+        now = time.monotonic()
+        for key in list(self._alarm_pending):
+            last = self._alarm_fired_t.get(key[0])
+            if force or last is None or now - last[0] >= 1.0:
+                n, label, val = self._alarm_pending.pop(key)
+                if n:
+                    self._log(self.t("msg_alarm_repeat", label=label, n=_fmt_int(n), val=analysis.fmt(val)), "error")
+
+    def _alarm_scan_session(self, s: Session, live: bool) -> None:
+        """Oturumun henüz bakılmamış satırlarını tarar. Biten oturumlar da (_drain_done) sonuna kadar
+        taranır; böylece iki kontrol arasında başlayıp biten hızlı aktarımlar da kaçmaz."""
+        act = [(i, a) for i, a in enumerate(self._alarms) if a["on"]]
+        start = self._alarm_scanned.get(s, 0)
+        with s.lock:
+            n = s.n
+            if not act or n <= start:
+                self._alarm_scanned[s] = n              # alarm yokken de ilerle: sonra eklenen alarm geçmişe bakmaz
+                return
+            start = max(start, n - 2_000_000)           # çok geride kaldıysa eskisini atla
+            names = list(s.channels)
+            cols = {nm: s.cols[k][start:n] for k, nm in enumerate(names) if any(a["ch"] == nm for _, a in act)}
+            th_ = s.t_host[start:n] if len(s.t_host) >= n else None
+        self._alarm_scanned[s] = n
+        for i, a in act:
+            col = cols.get(a["ch"])
+            if col is None or not len(col):
+                continue
+            y = analysis.convert(np.frombuffer(col, dtype=np.float64), analysis.unit_of(self._units, a["ch"]))
+            hits, armed = analysis.alarm_scan(y, a["op"], a["value"], a["hyst"], self._alarm_armed.get(i, True))
+            self._alarm_armed[i] = armed
+            if hits:
+                k = hits[0]
+                self._fire_alarm(i, a, s, start + k, float(y[k]), th_[k] if th_ is not None else None,
+                                 len(hits), live)
+
+    def _fire_alarm(self, i: int, a: dict, s: Session, row: int, val: float, t_host, count: int,
+                    live: bool = True) -> None:
+        t = self.t
+        now = time.monotonic()
+        label = self._alarm_label(a)
+        last = self._alarm_fired_t.get(i)
+        if last is not None and last[1]() is s and now - last[0] < 1.0:
+            pend = self._alarm_pending.setdefault((i, id(s)), [0, label, val])
+            pend[0] += count                         # aynı kayıtta aynı alarm saniyede en fazla bir kez yazılır
+            pend[2] = val
+            return
+        self._flush_alarm_pending(force=True)
+        self._alarm_fired_t[i] = (now, weakref.ref(s))
+        more = t("a_more", n=count - 1) if count > 1 else ""
+        self._log(t("msg_alarm", label=label, val=analysis.fmt(val), row=_fmt_int(row + 1)) + more, "error")
+        self._show_banner(t("alarm_banner", label=label, val=analysis.fmt(val),
+                            time=_dt.datetime.now().strftime("%H:%M:%S")), "bad", show_open=False)
+        k = self._alarm_notes.get(s, 0)
+        if k < ALARM_NOTE_MAX:                       # kayıt notlarla dolmasın
+            with s.lock:
+                s.add_note("⚠ " + t("note_alarm", label=label, val=analysis.fmt(val)),
+                           t_host if t_host is not None else float(row), row=row)
+            self._refresh_notes()
+            self._plot_sig = None
+        elif k == ALARM_NOTE_MAX:
+            self._log(t("alarm_note_cap", n=ALARM_NOTE_MAX), "warn")
+        self._alarm_notes[s] = k + 1
+        if a["beep"]:
+            QApplication.beep()
+        if live and a["cmd"] and self.engine is not None and not self.engine.reconnecting:
+            try:
+                self.engine.send((a["cmd"] + "\r\n").encode("utf-8"))
+                self._log(t("msg_sent", cmd=a["cmd"]), "info")
+            except Exception as e:  # noqa: BLE001
+                self._log(t("msg_send_err", err=e), "error")
+
+    # ================================================================ KATLANABİLİR PANELLER
+    def _cards(self) -> dict:
+        return {"conn": self.card_conn, "data": self.card_data, "save": self.card_save}
+
+    def _collapsed_state(self) -> dict:
+        d = {k: c.is_collapsed() for k, c in self._cards().items()}
+        d["plot"] = self._plot_collapsed
+        return d
+
+    def _save_collapsed(self, *_) -> None:
+        self.settings.setValue("collapsed", json.dumps(self._collapsed_state()))
+
+    def _set_plot_collapsed(self, on: bool, save: bool = True) -> None:
+        """Grafik paneli gizlenince sadece başlığı kalır; boşalan yeri terminal alır."""
+        on = bool(on)
+        if on == self._plot_collapsed:
+            return
+        if on:
+            self._split_open = self.splitter.sizes()
+        self._plot_collapsed = on
+        for w in (self.plot_tools, self.plot_split, self.lbl_x, self.x_cb, self.lbl_win, self.win_cb,
+                  self.btn_fit, self.btn_png):
+            w.setVisible(not on)
+        self.btn_plot_toggle.setText("▸" if on else "▾")
+        self.btn_plot_toggle.setToolTip(self.t("plot_show" if on else "plot_hide"))
+        if on:
+            hh = self.plot_hdr.sizeHint().height() + 26
+            self.plot_panel.setMaximumHeight(hh)
+            total = sum(self.splitter.sizes())
+            self.splitter.setSizes([hh, max(100, total - hh)])
+        else:
+            self.plot_panel.setMaximumHeight(16777215)
+            sizes = getattr(self, "_split_open", None)
+            if sizes and sum(sizes) > 0 and sizes[0] > 120:
+                self.splitter.setSizes(sizes)
+            else:
+                total = sum(self.splitter.sizes())
+                self.splitter.setSizes([int(total * .62), int(total * .38)])
+            self._plot_sig = None
+            QTimer.singleShot(0, self._update_plot)
+        if self.tabs.currentIndex() == 1:
+            self._update_analysis()
+        if save:
+            self._save_collapsed()
+
+    def _refresh_summaries(self) -> None:
+        """Katlı kartların başlığındaki kısa özet."""
+        t = self.t
+        mode = t("mode_live_short") if self.seg_mode.value() == "live" else t("mode_dma_short")
+        port = self.port_cb.currentData() or "—"
+        fmt_ = t("fmt_bin_short") if self._data_format == "binary" else ""
+        self.card_conn.set_summary(" · ".join(x for x in (str(port), self.baud_cb.currentText(), mode, fmt_) if x))
+        fs = self.fs_spin.value()
+        self.card_data.set_summary(" · ".join(x for x in (
+            f"{analysis.fmt(fs)} Hz" if fs > 0 else t("fs_unknown_short"),
+            t("units_n", n=len(self._units)) if self._units else "",
+            t("alarms_n", n=sum(1 for a in self._alarms if a["on"])) if any(a["on"] for a in self._alarms) else "") if x))
+        every = self.every_cb.currentData() or 0
+        auto = (t("auto_every", m=every) if every else t("auto_end_only")) if self.chk_auto.isChecked() else t("auto_off_short")
+        fmt_name = {"xlsx": "Excel", "csv": "CSV", "txt": "TXT"}[self.seg_fmt.value()]
+        self.card_save.set_summary(f"{fmt_name} · {auto}")
+
+    @staticmethod
+    def _bounds(x, ys):
+        """Verinin kapladığı alan: (x0, x1, y0, y1) ya da None."""
+        if not len(x):
+            return None
+        with np.errstate(invalid="ignore"):
+            x0, x1 = float(np.fmin.reduce(x)), float(np.fmax.reduce(x))
+            lo, hi = math.inf, -math.inf
+            for y in ys:
+                if len(y):
+                    a, b = float(np.fmin.reduce(y)), float(np.fmax.reduce(y))
+                    if a == a:
+                        lo, hi = min(lo, a), max(hi, b)
+        if not (math.isfinite(x0) and math.isfinite(x1) and math.isfinite(lo) and math.isfinite(hi)):
+            return None
+        return x0, x1, lo, hi
+
+    def _apply_plot_limits(self, x, ys, extra_y=()) -> None:
+        """Sürükleme/yakınlaştırma verinin dışına taşmasın: görünüm, verinin biraz ötesinde durur;
+        en fazla tüm veri ekrana sığana kadar uzaklaşılabilir."""
+        pi = self.plot.getPlotItem()
+        vb = pi.getViewBox()
+        b = self._bounds(x, ys)
+        if pi.ctrl.logXCheck.isChecked() or pi.ctrl.logYCheck.isChecked():
+            b = None                              # log eksende sınır birimi farklı: sınır koyma
+        if b is None:
+            vb.setLimits(xMin=-1e307, xMax=1e307, yMin=-1e307, yMax=1e307, maxXRange=None, maxYRange=None)
+            return
+        x0, x1, y0, y1 = b
+        for v in extra_y:                       # alarm eşik çizgileri de görülebilsin
+            y0, y1 = min(y0, v), max(y1, v)
+        sx = (x1 - x0) or 1.0
+        sy = (y1 - y0) or max(abs(y1) * 0.1, 1.0)
+        px, py = sx * 0.04, sy * 0.12
+        vb.setLimits(xMin=x0 - px, xMax=x1 + px, yMin=y0 - py, yMax=y1 + py,
+                     maxXRange=sx + 2 * px, maxYRange=sy + 2 * py)
+        lines = self._cursor_lines
+        v = self.view
+        ctx = (self._x_kind(v), id(v)) if v is not None else None
+        if v is not None and v.mode == "dma" and v.ended_at is None:
+            ctx = self._cursor_ctx                  # aktarım sürüyor: bitince (tam veriyle) karar ver
+        if ctx != self._cursor_ctx:                 # sadece eksen türü / kayıt değişince (canlı akışta zıplamasın)
+            self._cursor_ctx = ctx
+            if lines and any(not (x0 - px <= ln.value() <= x1 + px) for ln in lines):
+                for k, ln in enumerate(lines):      # imleçler ulaşılabilir yere gelsin
+                    ln.setValue(x0 + sx * (0.33 if k == 0 else 0.66))
 
     def _fit_plot(self) -> None:
         self.plot.enableAutoRange()
@@ -1508,6 +1912,10 @@ class MainWindow(QMainWindow):
             self._analysis_timer.setInterval(int(min(1500, max(150, 2000 * self._analysis_dur))))
 
     def _do_analysis(self) -> None:
+        if self._plot_collapsed:                  # istatistik grafikteki görünen aralıktan hesaplanır
+            self.stats_table.setRowCount(0)
+            self.lbl_stats_scope.setText(self.t("stats_plot_hidden"))
+            return
         want_stats = self.tabs.currentIndex() == 1
         want_fft = self.btn_fft.isChecked()
         if not (want_stats or want_fft):
@@ -1515,6 +1923,7 @@ class MainWindow(QMainWindow):
         lp, i0, i1 = self._visible_slice()
         if lp is None:
             self.stats_table.setRowCount(0)
+            self.lbl_stats_scope.setText("")
             for c in self._fft_curves.values():
                 c.setData([], [])
             return
@@ -1542,6 +1951,7 @@ class MainWindow(QMainWindow):
                 self._fft_curves[name].setData(f, a)
                 self._peaks[name] = peak
                 fmax = max(fmax, analysis.useful_fmax(f, a))
+            self._apply_fft_limits()
             if self._fft_fresh and fmax > 0:     # ilk açılışta ilginç bölgeye yakınlaş (sonra kullanıcıya bırak)
                 self._fft_fresh = False
                 self.fft_plot.enableAutoRange(axis="y")
@@ -1564,6 +1974,21 @@ class MainWindow(QMainWindow):
                     it.setText(txt)
             self.lbl_stats_scope.setText(self.t("stats_scope", n=_fmt_int(i1 - i0))
                                          + ("" if want_fft else "  ·  " + self.t("stats_fft_hint")))
+
+    def _apply_fft_limits(self) -> None:
+        fx, fy = 0.0, 0.0
+        for c in self._fft_curves.values():
+            xd, yd = c.getData()
+            if xd is not None and len(xd):
+                fx = max(fx, float(xd[-1]))
+                fy = max(fy, float(np.nanmax(yd)) if len(yd) else 0.0)
+        fpi = self.fft_plot.getPlotItem()
+        vb = fpi.getViewBox()
+        if fx <= 0 or fpi.ctrl.logXCheck.isChecked() or fpi.ctrl.logYCheck.isChecked():
+            vb.setLimits(xMin=-1e307, xMax=1e307, yMin=-1e307, yMax=1e307, maxXRange=None, maxYRange=None)
+            return
+        fy = fy if fy > 0 and math.isfinite(fy) else 1.0
+        vb.setLimits(xMin=0, xMax=fx * 1.02, yMin=-fy * 0.05, yMax=fy * 1.25, maxXRange=fx * 1.02, maxYRange=fy * 1.3)
 
     def _toggle_fft(self, on: bool) -> None:
         self.fft_plot.setVisible(on)
@@ -1647,7 +2072,6 @@ class MainWindow(QMainWindow):
             row = s.add_note(text, t_now, row=row)
         self._log(self.t("msg_note", row=_fmt_int(row + 1), text=text), "info")
         self._plot_sig = None
-        self._notes_sig = None
         self._refresh_notes()
         if s.ended_at is not None:
             if s not in self._unsaved:
@@ -1691,10 +2115,15 @@ class MainWindow(QMainWindow):
         sig = (id(s), len(s.notes)) if s is not None else None
         if sig == self._notes_sig:
             return
+        old = self._notes_sig
         self._notes_sig = sig
-        self.notes_list.clear()
         notes = list(s.notes) if s is not None else []
-        for row, t_, text in notes:
+        if old is not None and sig is not None and old[0] == sig[0] and old[1] < sig[1]:
+            new = notes[old[1]:]                   # notlar sadece eklenir: tüm listeyi yeniden kurma
+        else:
+            self.notes_list.clear()
+            new = notes
+        for row, t_, text in new:
             self.notes_list.addItem(f"#{row + 1}  ·  {analysis.fmt(round(t_, 2))} s  ·  {text}")
         self.lbl_notes_empty.setVisible(not notes)
 
@@ -1709,6 +2138,7 @@ class MainWindow(QMainWindow):
             self.settings.setValue("units", json.dumps(self._units, ensure_ascii=False))
             self._curve_owner = None          # gösterge adları birimle yeniden yazılsın
             self._plot_sig = None
+            self._alarm_sig = None            # eşik çizgisindeki birim de güncellensin
             self._fft_curves_reset()
 
     def _fft_curves_reset(self) -> None:
@@ -2113,7 +2543,11 @@ class MainWindow(QMainWindow):
             self._log(self.t("msg_send_err", err=e), "error")
 
     def eventFilter(self, obj, ev) -> bool:
-        if obj is self.send_edit and ev.type() == QEvent.KeyPress and ev.key() in (Qt.Key_Up, Qt.Key_Down):
+        hdr = getattr(self, "plot_hdr", None)        # pencere kurulurken de olay gelebilir
+        if hdr is not None and obj is hdr.title and ev.type() == QEvent.MouseButtonRelease and ev.button() == Qt.LeftButton:
+            self._set_plot_collapsed(not self._plot_collapsed)
+            return True
+        if obj is getattr(self, "send_edit", None) and ev.type() == QEvent.KeyPress and ev.key() in (Qt.Key_Up, Qt.Key_Down):
             if self._history:
                 step = -1 if ev.key() == Qt.Key_Up else 1
                 self._hist_pos = max(0, min(len(self._history), self._hist_pos + step))
@@ -2142,7 +2576,7 @@ class MainWindow(QMainWindow):
     def _msg(self, kind: str, title: str, text: str) -> None:
         """Düz metin mesaj kutusu (hata metnindeki dosya/port adları HTML olarak yorumlanmaz)."""
         box = QMessageBox(self)
-        box.setIcon({"error": QMessageBox.Critical, "warn": QMessageBox.Warning}.get(kind, QMessageBox.Information))
+        box.setIconPixmap(status_icon(kind))
         box.setWindowTitle(title)
         box.setTextFormat(Qt.PlainText)
         box.setText(str(text))
@@ -2151,7 +2585,7 @@ class MainWindow(QMainWindow):
     def _ask(self, title: str, text: str, yes: str, alt: str | None = None):
         """True = yes, "alt" = alternatif buton, None = iptal."""
         box = QMessageBox(self)
-        box.setIcon(QMessageBox.Question)
+        box.setIconPixmap(status_icon("question"))
         box.setWindowTitle(title)
         box.setTextFormat(Qt.PlainText)
         box.setText(text)
@@ -2259,7 +2693,7 @@ class MainWindow(QMainWindow):
     def _ask_unblock(self) -> None:
         t = self.t
         box = QMessageBox(self)
-        box.setIcon(QMessageBox.Question)
+        box.setIconPixmap(status_icon("question"))
         box.setWindowTitle(t("unblock_title"))
         box.setText(t("unblock_ask"))
         yes = box.addButton(t("unblock_yes"), QMessageBox.AcceptRole)
@@ -2345,7 +2779,7 @@ class MainWindow(QMainWindow):
         def ok(res):
             if res["newer"]:
                 box = QMessageBox(self)
-                box.setIcon(QMessageBox.Information)
+                box.setIconPixmap(status_icon("info"))
                 box.setWindowTitle(t("menu_updates"))
                 box.setText(t("upd_new", new=res["latest"], cur=__version__))
                 go = box.addButton(t("upd_open"), QMessageBox.AcceptRole)

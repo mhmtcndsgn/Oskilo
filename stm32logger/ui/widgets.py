@@ -7,7 +7,10 @@ from PySide6.QtWidgets import (QButtonGroup, QFrame, QHBoxLayout, QLabel, QPushB
 
 
 class Card(QFrame):
-    """Başlıklı yan panel kartı."""
+    """Başlıklı yan panel kartı. Başlığa tıklanınca katlanır; katlıyken başlığın yanında kısa bir
+    özet görünür. add_persistent() ile eklenenler (ör. Bağlan düğmesi) katlıyken de görünür kalır."""
+
+    toggled = Signal(bool)          # True = katlandı
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -15,18 +18,82 @@ class Card(QFrame):
         self.lay = QVBoxLayout(self)
         self.lay.setContentsMargins(14, 12, 14, 14)
         self.lay.setSpacing(6)
+        self.head = QWidget()
+        self.head.setObjectName("CardHead")
+        self.head.setCursor(Qt.PointingHandCursor)
+        hl = QHBoxLayout(self.head)
+        hl.setContentsMargins(0, 0, 0, 0)
+        hl.setSpacing(8)
         self.title = QLabel()
         self.title.setObjectName("CardTitle")
-        self.lay.addWidget(self.title)
+        self.summary = QLabel()
+        self.summary.setObjectName("CardSummary")
+        self.summary.setTextFormat(Qt.PlainText)
+        self.summary.setMinimumWidth(10)
+        self.chevron = QLabel("▾")
+        self.chevron.setObjectName("CardChevron")
+        hl.addWidget(self.title)
+        hl.addWidget(self.summary)
+        hl.addStretch(1)
+        hl.addWidget(self.chevron)
+        self.lay.addWidget(self.head)
+        self.body = QWidget()
+        self.body.setObjectName("CardBody")
+        self.blay = QVBoxLayout(self.body)
+        self.blay.setContentsMargins(0, 0, 0, 0)
+        self.blay.setSpacing(6)
+        self.lay.addWidget(self.body)
+        self._collapsed = False
+        self._summary_text = ""
+        self.summary.hide()
+        self.head.installEventFilter(self)
+
+    def eventFilter(self, obj, ev):
+        if obj is self.head and ev.type() == QEvent.MouseButtonRelease and ev.button() == Qt.LeftButton:
+            self.set_collapsed(not self._collapsed)
+            self.toggled.emit(self._collapsed)
+            return True
+        return False
+
+    def is_collapsed(self) -> bool:
+        return self._collapsed
+
+    def set_collapsed(self, on: bool) -> None:
+        self._collapsed = bool(on)
+        self.body.setVisible(not self._collapsed)
+        self.chevron.setText("▸" if self._collapsed else "▾")
+        self.summary.setVisible(self._collapsed and bool(self._summary_text))
+        self.head.setToolTip(self._summary_text if self._collapsed else "")
+
+    def set_summary(self, text: str) -> None:
+        if text == self._summary_text:
+            return
+        self._summary_text = text
+        fm = self.summary.fontMetrics()
+        self.summary.setText(fm.elidedText(text, Qt.ElideRight, 190))
+        self.summary.setVisible(self._collapsed and bool(text))
+        if self._collapsed:
+            self.head.setToolTip(text)
 
     def label(self) -> QLabel:
         lbl = QLabel()
         lbl.setObjectName("FieldLabel")
-        self.lay.addSpacing(2)
-        self.lay.addWidget(lbl)
+        self.blay.addSpacing(2)
+        self.blay.addWidget(lbl)
         return lbl
 
+    def spacing(self, px: int) -> None:
+        self.blay.addSpacing(px)
+
     def add(self, w):
+        if isinstance(w, QWidget):
+            self.blay.addWidget(w)
+        else:
+            self.blay.addLayout(w)
+        return w
+
+    def add_persistent(self, w):
+        """Katlıyken de görünen öğe (kartın en altında)."""
         if isinstance(w, QWidget):
             self.lay.addWidget(w)
         else:
