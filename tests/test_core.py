@@ -203,7 +203,7 @@ def test_unblock_only_known_files_and_verify():
 
     with tempfile.TemporaryDirectory() as d:
         os.makedirs(os.path.join(d, "_internal"))
-        exe = os.path.join(d, "Data_Logger.exe")
+        exe = os.path.join(d, "Oskilo.exe")
         dll = os.path.join(d, "_internal", "Qt6Core.dll")
         for p in (exe, dll):
             open(p, "w").write("orijinal " + p)
@@ -625,3 +625,136 @@ def test_analysis_fft_stats():
     assert analysis.sanitize_units({"a": {"scale": "x"}, "b": {"scale": 2, "offset": 1, "unit": "V"}}) == \
         {"b": {"scale": 2.0, "offset": 1.0, "unit": "V"}}
     assert analysis.fmt(2048.0) == "2048" and analysis.fmt(float("nan")) == "—"
+
+
+def test_settings_migration_from_data_logger(tmp_path):
+    """v3.0 (Oskilo): önceki 'Data Logger' ayarları ilk açılışta taşınır; sıfırlama onları geri getirmez."""
+    from PySide6.QtCore import QSettings
+
+    from stm32logger import ORG_NAME
+    from stm32logger.system import app_settings, reset_settings
+
+    QSettings.setPath(QSettings.NativeFormat, QSettings.UserScope, str(tmp_path))
+    QSettings.setPath(QSettings.IniFormat, QSettings.UserScope, str(tmp_path))
+    old = QSettings(ORG_NAME, "DataLogger")
+    old.setValue("folder", "/x/Data Logger")
+    old.setValue("accent", "pink")
+    old.sync()
+    s = app_settings()
+    assert s.value("folder") == "/x/Data Logger" and s.value("accent") == "pink"
+    s.setValue("accent", "oskilo")
+    assert app_settings().value("accent") == "oskilo"        # ikinci açılışta tekrar taşınıp ezilmez
+    reset_settings(s)
+    assert app_settings().value("folder") is None
+
+
+def test_binary_frames_decoder():
+    import random
+    import struct
+
+    from stm32logger import binary as b
+
+    frames = [b.make_frame(0x01, 0, (1, 65535)), b.make_frame(0x02, 1, (-5, 7)), b.make_frame(0x03, 2, (4000000000,)),
+              b.make_frame(0x04, 3, (-2000000000, 5)), b.make_frame(0x05, 4, (1.5, float("inf"))),
+              b.make_frame(b.T_START, 100), b.make_frame(b.T_END, 100)]
+    stream = b"\x00junk\xa5" + frames[0] + b"\xa5\x5a\x99" + b"".join(frames[1:])
+    bad = bytearray(b.make_frame(0x02, 9, (1, 2)))
+    bad[9] ^= 0xFF                                            # bozuk değer -> CRC tutmaz
+    stream += bytes(bad) + b.make_frame(0x02, 10, (3, 4))
+    for chunked in (False, True):
+        d = b.Decoder()
+        out = []
+        if chunked:                                          # 1–7 baytlık parçalarla (USB gibi)
+            i = 0
+            rnd = random.Random(1)
+            while i < len(stream):
+                k = rnd.randint(1, 7)
+                out += d.feed(stream[i:i + k])
+                i += k
+        else:
+            out = d.feed(stream)
+        assert out[0] == ("data", 0, [1.0, 65535.0]) and out[1] == ("data", 1, [-5.0, 7.0])
+        assert out[2] == ("data", 2, [4000000000.0]) and out[3] == ("data", 3, [-2000000000.0, 5.0])
+        assert out[4][2][0] == 1.5 and out[4][2][1] != out[4][2][1]          # inf -> NaN
+        assert out[5] == ("start", 100) and out[6] == ("end", 100)
+        assert out[7] == ("crc",) and out[8] == ("data", 10, [3.0, 4.0]) and len(out) == 9, out
+        assert d.crc_errors == 1 and d.skipped > 0
+    assert b.crc16(b"123456789") == 0x29B1                    # CRC-16/CCITT-FALSE kontrol değeri
+    assert struct.unpack("<H", b.make_frame(0x01, 0, (1,))[-2:])[0] == b.crc16(b.make_frame(0x01, 0, (1,))[2:-2])
+
+
+def test_engine_binary_mode_dma_and_raw_import(tmp_path):
+    from stm32logger import binary as b
+    from stm32logger.importer import load_file
+
+    chunks = [b.make_frame(b.T_START, 300)]
+    for i in range(300):
+        if i == 150:
+            continue                                         # bir çerçeve kayıp -> eksik veri sayılmalı
+        fr = bytearray(b.make_frame(0x02, i, (i, -i)))
+        if i == 200:
+            fr[10] ^= 1                                      # CRC hatası
+        chunks.append(bytes(fr))
+    chunks.append(b.make_frame(b.T_END, 300))
+    data = b"".join(chunks)
+    ser = _FakeSerial([data[i:i + 333] for i in range(0, len(data), 333)])
+    raw = str(tmp_path / "ham.bin")
+    eng = Engine(ser, mode="dma", session_factory=lambda: Session(mode="dma", seq_mode="on"),
+                 raw_path=raw, idle_timeout=0.3, data_format="binary")
+    eng.start()
+    s = eng.done_q.get(timeout=10)
+    eng.stop()
+    assert s.n == 298 and s.expected == 300 and s.missing == 2 and s.crc_errors == 1, (s.n, s.missing, s.crc_errors)
+    assert list(s.cols[0])[:3] == [0.0, 1.0, 2.0] and list(s.cols[1])[:3] == [0.0, -1.0, -2.0]
+    assert not s.integrity_ok
+    s2 = load_file(raw)
+    assert s2.n == 298 and s2.crc_errors == 1 and s2.missing == 2
+
+
+def test_alarm_scan_and_sanitize():
+    import numpy as np
+
+    from stm32logger import analysis as a
+
+    y = np.array([0, 1, 5, 6, 4.9, 5.2, 2, 6, np.nan, 7, 1])
+    hits, armed = a.alarm_scan(y, ">", 5.0, 1.0, True)
+    assert hits == [3, 7] and armed is True        # 5.2 eşiği geçti ama 4.0'ın altına inmeden yeniden kurulmadı
+    hits, armed = a.alarm_scan(y, ">", 5.0, 0.0, True)
+    assert hits == [3, 5, 7] and armed is True       # NaN yok sayılır; 7 geldiğinde alarm hâlâ tetikli
+    hits, armed = a.alarm_scan(np.array([6.0, 7.0]), ">", 5.0, 1.0, False)
+    assert hits == [] and armed is False            # önceki parçada tetiklenmişti, hâlâ eşik üstünde
+    hits, _ = a.alarm_scan(np.array([3.0, 0.5, 2.0]), "<", 1.0, 0.0, True)
+    assert hits == [1]
+    many = np.tile([0.0, 10.0], 5000)
+    hits, armed = a.alarm_scan(many, ">", 5, 0, True, max_hits=50)
+    assert len(hits) == 50 and armed is False       # son örnek eşik üstünde: alarm tetikli kalır
+    assert a.sanitize_alarms([{"ch": "K1", "op": ">", "value": "3.3"}, {"ch": "", "value": 1},
+                              {"ch": "K2", "value": "x"}, 5]) == \
+        [{"on": True, "ch": "K1", "op": ">", "value": 3.3, "hyst": 0.0, "beep": False, "cmd": ""}]
+
+
+
+def test_binary_flush_and_seq32():
+    from stm32logger import binary as b
+
+    d = b.Decoder()
+    good = b.make_frame(0x02, 5, (1, 2))
+    cut = b.make_frame(0x02, 6, (3, 4))[:-3]                  # aktarım sonunda yarım kalan çerçeve
+    assert d.feed(good + cut) == [("data", 5, [1.0, 2.0])]
+    assert d.flush() == [] and not d.buf and d.crc_errors == 0 and d.truncated == 1   # durdurunca yarım kalan: bozuk değil
+    assert d.feed(good) == [("data", 5, [1.0, 2.0])]          # sonraki aktarım temiz başlar
+    # bozuk kanal sayısı uzun bir çerçeve bekletir; flush arkadaki sağlam çerçeveleri kurtarır
+    bad = bytearray(b.make_frame(0x02, 7, (1, 2)))
+    bad[3] = 60
+    tail = b.make_frame(0x02, 8, (5, 6)) + b.make_frame(b.T_END, 9)
+    d2 = b.Decoder()
+    assert d2.feed(bytes(bad) + tail) == []
+    out = d2.flush()
+    assert ("data", 8, [5.0, 6.0]) in out and ("end", 9) in out and ("crc",) in out
+    # 32 bit sıra no: kart 40000'de yeniden başlarsa 16 bit taşma sanılmaz
+    s = Session(mode="live", seq_mode="on")
+    s.seq32 = True
+    for i in list(range(39998, 40001)) + [0, 1, 2]:
+        s.add(0.0, parse_line(f"{i},1"))
+    s.flush_pending()
+    assert max(s.seq) < 65536 and s.missing < 100, (s.missing, list(s.seq)[-3:])
