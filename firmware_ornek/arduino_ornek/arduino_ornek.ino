@@ -1,5 +1,5 @@
 /*
- * Veri Kaydedici — Arduino / ESP32 / ESP8266 örneği
+ * Oskilo — Arduino / ESP32 / ESP8266 örneği
  * --------------------------------------------------
  * Uygulamada aynı baud hızını (115200) seç.
  *
