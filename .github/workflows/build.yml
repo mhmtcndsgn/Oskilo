@@ -1,7 +1,7 @@
-name: Build Data Logger
+name: Build Oskilo
 
 # - main'e her push: testler + Windows/macOS derlemesi (Actions > Artifacts)
-# - Yeni sürüm yayınlamak: Actions > "Build Data Logger" > "Run workflow" >
+# - Yeni sürüm yayınlamak: Actions > "Build Oskilo" > "Run workflow" >
 #   sürüm kutusuna örn. v2.1.0 yaz > Run. Sürüm, stm32logger/__init__.py içindeki
 #   __version__ ile aynı olmalı. Derleme bitince Releases'a eklenir; README'deki
 #   indirme butonları otomatik olarak bu sürümü indirir.
@@ -77,7 +77,7 @@ jobs:
       - name: Derle (onedir = hızlı açılış)
         run: >
           pyinstaller --noconfirm --clean --windowed --onedir --noupx
-          --name "Data_Logger"
+          --name "Oskilo"
           --icon assets/icon.ico
           --version-file packaging/version_info.txt
           --add-data "assets;assets"
@@ -85,24 +85,24 @@ jobs:
           --exclude-module PIL --exclude-module PyQt5 --exclude-module PyQt6
           main.py
       - name: Dosya parmak izleri (manifest)
-        run: python packaging/make_manifest.py dist/Data_Logger
+        run: python packaging/make_manifest.py dist/Oskilo
       - name: Paketi doğrula (DEMO ile uçtan uca test + bütünlük)
         shell: pwsh
         timeout-minutes: 3
         env:
           QT_QPA_PLATFORM: offscreen
         run: |
-          $p = Start-Process -FilePath "dist/Data_Logger/Data_Logger.exe" -ArgumentList "--selftest","selftest.txt" -Wait -PassThru
+          $p = Start-Process -FilePath "dist/Oskilo/Oskilo.exe" -ArgumentList "--selftest","selftest.txt" -Wait -PassThru
           Get-Content selftest.txt
           if ($p.ExitCode -ne 0) { exit 1 }
           if (-not (Select-String -Path selftest.txt -Pattern "integrity=ok" -Quiet)) { exit 1 }
       - name: Zip
         shell: pwsh
-        run: Compress-Archive -Path dist/Data_Logger -DestinationPath Data_Logger_Windows.zip
+        run: Compress-Archive -Path dist/Oskilo -DestinationPath Oskilo_Windows.zip
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: Data_Logger_Windows
-          path: Data_Logger_Windows.zip
+          name: Oskilo_Windows
+          path: Oskilo_Windows.zip
 
   build-macos:
     needs: test
@@ -119,7 +119,7 @@ jobs:
       - name: Derle
         run: >
           pyinstaller --noconfirm --clean --windowed --onedir --noupx
-          --name "Data Logger"
+          --name "Oskilo"
           --icon assets/icon.icns
           --add-data "assets:assets"
           --osx-bundle-identifier "com.mhmtcndsgn.datalogger"
@@ -131,17 +131,17 @@ jobs:
         env:
           QT_QPA_PLATFORM: offscreen
         run: |
-          "dist/Data Logger.app/Contents/MacOS/Data Logger" --selftest selftest.txt
+          "dist/Oskilo.app/Contents/MacOS/Oskilo" --selftest selftest.txt
           cat selftest.txt
       - name: DMG
         run: |
-          mkdir -p dmg && cp -R "dist/Data Logger.app" dmg/
+          mkdir -p dmg && cp -R "dist/Oskilo.app" dmg/
           ln -s /Applications dmg/Applications
-          hdiutil create -volname "Data Logger" -srcfolder dmg -ov -format UDZO Data_Logger_macOS.dmg
+          hdiutil create -volname "Oskilo" -srcfolder dmg -ov -format UDZO Oskilo_macOS.dmg
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: Data_Logger_macOS
-          path: Data_Logger_macOS.dmg
+          name: Oskilo_macOS
+          path: Oskilo_macOS.dmg
 
   release:
     if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.version != '')
@@ -159,36 +159,36 @@ jobs:
       - name: SHA256SUMS
         working-directory: assets_out
         run: |
-          sha256sum Data_Logger_Windows.zip Data_Logger_macOS.dmg > SHA256SUMS.txt
+          sha256sum Oskilo_Windows.zip Oskilo_macOS.dmg > SHA256SUMS.txt
           cat SHA256SUMS.txt
       - name: Derleme kanıtı (artifact attestation)
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
           subject-path: |
-            assets_out/Data_Logger_Windows.zip
-            assets_out/Data_Logger_macOS.dmg
+            assets_out/Oskilo_Windows.zip
+            assets_out/Oskilo_macOS.dmg
       - uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
         with:
           tag_name: ${{ inputs.version || github.ref_name }}
           target_commitish: ${{ github.sha }}
-          name: "Data Logger ${{ inputs.version || github.ref_name }}"
+          name: "Oskilo ${{ inputs.version || github.ref_name }}"
           make_latest: true
           body: |
             ## Download / İndir
 
             | | |
             |---|---|
-            | 🖥️ **Windows 10/11** | `Data_Logger_Windows.zip` → right-click → **Properties → Unblock** → extract → `Data_Logger.exe` |
-            | 🍎 **macOS (Apple Silicon)** | `Data_Logger_macOS.dmg` → drag to Applications → first launch: **System Settings → Privacy & Security → Open Anyway** |
+            | 🖥️ **Windows 10/11** | `Oskilo_Windows.zip` → right-click → **Properties → Unblock** → extract → `Oskilo.exe` |
+            | 🍎 **macOS (Apple Silicon)** | `Oskilo_macOS.dmg` → drag to Applications → first launch: **System Settings → Privacy & Security → Open Anyway** |
 
             **TR:** Windows'ta zip'e sağ tıkla → **Özellikler → Engellemeyi kaldır** → Tamam, sonra çıkar. Böylece "açmak istiyor musunuz" uyarısı çıkmaz. macOS'ta ilk açılışta **Sistem Ayarları → Gizlilik ve Güvenlik → Yine de Aç**.
 
             ### Verify the download / İndirmeyi doğrula
             - `SHA256SUMS.txt` lists the SHA-256 fingerprint of each file. / Her dosyanın parmak izi `SHA256SUMS.txt` içinde.
-              Windows: `Get-FileHash Data_Logger_Windows.zip` · macOS: `shasum -a 256 Data_Logger_macOS.dmg`
-            - Built by GitHub Actions from this repository (build provenance): `gh attestation verify Data_Logger_Windows.zip -R mhmtcndsgn/Data-Logger`
+              Windows: `Get-FileHash Oskilo_Windows.zip` · macOS: `shasum -a 256 Oskilo_macOS.dmg`
+            - Built by GitHub Actions from this repository (build provenance): `gh attestation verify Oskilo_Windows.zip -R mhmtcndsgn/Oskilo`
             - In the app / Uygulamada: **? → About / Hakkında → Verify files / Dosyaları doğrula**
           files: |
-            assets_out/Data_Logger_Windows.zip
-            assets_out/Data_Logger_macOS.dmg
+            assets_out/Oskilo_Windows.zip
+            assets_out/Oskilo_macOS.dmg
             assets_out/SHA256SUMS.txt
