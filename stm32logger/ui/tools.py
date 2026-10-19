@@ -171,7 +171,7 @@ class QuickCmdDialog(QDialog):
 class AlarmsDialog(QDialog):
     """Kanal başına eşik alarmları: koşul, eşik, geri dönüş payı, ses, karta komut."""
 
-    COLS = ("a_col_on", "a_col_ch", "a_col_op", "a_col_value", "a_col_hyst", "a_col_beep", "a_col_cmd")
+    COLS = ("a_col_on", "a_col_ch", "a_col_op", "a_col_value", "a_col_hyst", "a_col_beep", "a_col_rec", "a_col_cmd")
 
     def __init__(self, parent, lang: str, channels: list[str], alarms: list[dict], units: dict):
         super().__init__(parent)
@@ -179,7 +179,7 @@ class AlarmsDialog(QDialog):
         self.channels = list(channels)
         self.units = units
         self.setWindowTitle(t("alarms_title"))
-        self.setMinimumSize(900, 380)
+        self.setMinimumSize(980, 380)
         lay = QVBoxLayout(self)
         info = QLabel(t("alarms_help"))
         info.setWordWrap(True)
@@ -189,10 +189,13 @@ class AlarmsDialog(QDialog):
         self.table.setHorizontalHeaderLabels([t(c) for c in self.COLS])
         self.table.verticalHeader().setVisible(False)
         hh = self.table.horizontalHeader()
-        for c in (0, 2, 3, 4, 5):
+        for c in (0, 2, 3, 4, 5, 6):
             hh.setSectionResizeMode(c, QHeaderView.ResizeToContents)
         hh.setSectionResizeMode(1, QHeaderView.Stretch)
-        hh.setSectionResizeMode(6, QHeaderView.Stretch)
+        hh.setSectionResizeMode(7, QHeaderView.Stretch)
+        hi = self.table.horizontalHeaderItem(6)
+        if hi is not None:
+            hi.setToolTip(t("a_col_rec_tip"))
         for a in alarms:
             self._add_row(a)
         lay.addWidget(self.table, 1)
@@ -223,7 +226,7 @@ class AlarmsDialog(QDialog):
         if self.table.rowCount() >= analysis.MAX_ALARMS:
             return
         a = a or {"on": True, "ch": self.channels[0] if self.channels else "", "op": ">", "value": 0.0,
-                  "hyst": 0.0, "beep": False, "cmd": ""}
+                  "hyst": 0.0, "beep": False, "cmd": "", "rec": False}
         r = self.table.rowCount()
         self.table.insertRow(r)
         self.table.setItem(r, 0, self._check_item(a["on"]))
@@ -240,7 +243,10 @@ class AlarmsDialog(QDialog):
         self.table.setItem(r, 3, QTableWidgetItem(f"{a['value']:.10g}"))
         self.table.setItem(r, 4, QTableWidgetItem(f"{a['hyst']:.10g}"))
         self.table.setItem(r, 5, self._check_item(a["beep"]))
-        self.table.setItem(r, 6, QTableWidgetItem(a["cmd"]))
+        rec = self._check_item(a.get("rec", False))
+        rec.setToolTip(self.t("a_col_rec_tip"))
+        self.table.setItem(r, 6, rec)
+        self.table.setItem(r, 7, QTableWidgetItem(a["cmd"]))
 
     def _del_rows(self) -> None:
         for r in sorted({i.row() for i in self.table.selectedIndexes()}, reverse=True):
@@ -290,5 +296,6 @@ class AlarmsDialog(QDialog):
                         "op": self.table.cellWidget(r, 2).currentData(),
                         "value": value, "hyst": hyst,
                         "beep": self.table.item(r, 5).checkState() == Qt.Checked,
-                        "cmd": self.table.item(r, 6).text().strip()})
+                        "rec": self.table.item(r, 6).checkState() == Qt.Checked,
+                        "cmd": (self.table.item(r, 7).text() if self.table.item(r, 7) else "").strip()})
         return analysis.sanitize_alarms(out)

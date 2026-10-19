@@ -177,8 +177,9 @@ QPushButton {{
 QPushButton:hover {{ background: {HOVER}; border-color: {HOVER_BORDER}; }}
 QPushButton:pressed {{ background: {PRESSED}; }}
 QPushButton:disabled {{ color: {FAINT}; background: {BG_PANEL}; border-color: {BORDER_SOFT}; }}
-QPushButton#Primary {{ background: {GREEN}; border-color: {GREEN_HI}; color: white; padding: 9px; font-size: 10.5pt; }}
-QPushButton#Primary:hover {{ background: {GREEN_HI}; }}
+QPushButton#Primary {{ background: {ACCENT}; border-color: {ACCENT_HI}; color: white; padding: 9px; font-size: 10.5pt; }}
+QPushButton#Primary:hover {{ background: {ACCENT_HI}; }}
+QPushButton#Primary:disabled {{ background: {BG_PANEL}; border-color: {BORDER_SOFT}; color: {FAINT}; }}
 QPushButton#Danger {{ background: {RED}; border-color: {RED_HI}; color: white; padding: 9px; font-size: 10.5pt; }}
 QPushButton#Danger:hover {{ background: {RED_HI}; }}
 QPushButton#Accent {{ background: {ACCENT}; border-color: {ACCENT_HI}; color: white; }}

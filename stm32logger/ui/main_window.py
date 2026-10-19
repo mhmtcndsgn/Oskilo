@@ -13,7 +13,7 @@ import sys
 import threading
 import weakref
 import time
-from bisect import bisect_left
+from bisect import bisect_left, bisect_right
 from pathlib import Path
 
 import numpy as np
@@ -24,7 +24,7 @@ from PySide6.QtGui import (QAction, QActionGroup, QColor, QDesktopServices, QFon
 from PySide6.QtWidgets import (QApplication, QCheckBox, QComboBox, QDoubleSpinBox, QFileDialog, QFrame,
                                QHBoxLayout, QHeaderView, QInputDialog, QLabel, QLineEdit, QListWidget,
                                QMainWindow, QMenu, QMessageBox, QPlainTextEdit, QProgressBar, QProgressDialog,
-                               QPushButton, QScrollArea, QSplitter, QTableWidget, QTableWidgetItem, QTabWidget,
+                               QPushButton, QScrollArea, QSpinBox, QSplitter, QTableWidget, QTableWidgetItem, QTabWidget,
                                QToolButton, QVBoxLayout, QWidget)
 
 from .. import APP_NAME, __version__
@@ -32,7 +32,7 @@ from .. import analysis, system
 from ..engine import DEMO_PORT, Engine, list_ports, open_port
 from ..exporter import FORMATS, default_filename, export_session
 from ..i18n import T
-from ..session import Session, clean_note
+from ..session import Session, clean_note, extract as extract_session
 from . import theme as th
 from ..analysis import parse_hex, sanitize_cmds
 from .tools import AlarmsDialog, QuickCmdDialog, UnitsDialog
@@ -204,6 +204,12 @@ class MainWindow(QMainWindow):
         self._alarm_fired_t: dict[int, tuple] = {}     # alarm -> (zaman, oturum ref)
         self._alarm_lines: list = []
         self._alarm_sig = None
+        # tetikli kayıt: _trig = sürmekte olan olay (parçalar, kaynak oturum, bitiş zamanı...) ya da None
+        self._trig: dict | None = None
+        self._trig_tail: Session | None = None     # bölünen arabelleğin son 'önce' saniyesi (sınırda tetik için)
+        self._trig_count = 0
+        self._conn_trig = False                    # bu bağlantı tetikli kayıt modunda mı
+        self._trig_pre_s, self._trig_dur_s = 5, 60
 
         self._theme_mode = self._sv("theme_mode", "system")
         if self._theme_mode not in th.MODES:
@@ -225,7 +231,7 @@ class MainWindow(QMainWindow):
         self.setMinimumSize(960, 620)
 
         self._build()
-        guard_wheel(self.port_cb, self.baud_cb, self.fs_spin, self.seq_cb, self.idle_spin,
+        guard_wheel(self.port_cb, self.baud_cb, self.fs_spin, self.seq_cb, self.idle_spin, self.trig_pre, self.trig_dur,
                     self.x_cb, self.win_cb, self.eol_cb, self.lang_cb)
         self._load_settings()
         self.retranslate()
@@ -475,6 +481,33 @@ class MainWindow(QMainWindow):
             self.every_cb.addItem(str(m), m)
         c.add(self.every_cb)
         self.chk_auto.toggled.connect(lambda on: (self.every_cb.setEnabled(on), self.lbl_every.setEnabled(on)))
+        c.spacing(4)
+        self.chk_trig = QCheckBox()
+        c.add(self.chk_trig)
+        self.trig_pre = QSpinBox()
+        self.trig_pre.setRange(0, analysis.TRIG_PRE_MAX)
+        self.trig_dur = QSpinBox()
+        self.trig_dur.setRange(analysis.TRIG_DUR_MIN, analysis.TRIG_DUR_MAX)
+        for sb in (self.trig_pre, self.trig_dur):
+            sb.setSuffix(" s")
+            sb.setButtonSymbols(QSpinBox.NoButtons)
+        self.lbl_trig_pre, self.lbl_trig_dur = QLabel(), QLabel()
+        for lb in (self.lbl_trig_pre, self.lbl_trig_dur):
+            lb.setObjectName("FieldLabel")
+        trow = QHBoxLayout()
+        trow.setSpacing(6)
+        trow.addWidget(self.lbl_trig_pre)
+        trow.addWidget(self.trig_pre, 1)
+        trow.addSpacing(4)
+        trow.addWidget(self.lbl_trig_dur)
+        trow.addWidget(self.trig_dur, 1)
+        self.trig_row = QWidget()
+        self.trig_row.setLayout(trow)
+        trow.setContentsMargins(0, 0, 0, 0)
+        c.add(self.trig_row)
+        self.lbl_trig_hint = hint_label()
+        c.add(self.lbl_trig_hint)
+        self.chk_trig.toggled.connect(lambda *_: self._sync_trig_widgets())
         c.add(self.chk_raw)
         c.spacing(4)
         self.btn_save_quick = QPushButton()
@@ -809,6 +842,12 @@ class MainWindow(QMainWindow):
             self.every_cb.setItemText(i, t("as_off") if m == 0 else f"{m} {unit}")
         self.btn_save_quick.setText(t("save_quick"))
         self.btn_save_quick.setToolTip(t("save_quick_tip") + "  (Ctrl+S)")
+        self.chk_trig.setText(t("trig_chk"))
+        self.chk_trig.setToolTip(t("trig_tip"))
+        self.lbl_trig_pre.setText(t("trig_pre"))
+        self.lbl_trig_dur.setText(t("trig_dur"))
+        self.lbl_trig_hint.setText(t("trig_hint"))
+        self._sync_trig_widgets()
         self.chk_raw.setText(t("rawbackup"))
         self.chk_raw.setToolTip(t("rawbackup_tip"))
         self.btn_save_as.setText(t("save_now"))
@@ -984,6 +1023,10 @@ class MainWindow(QMainWindow):
         self.every_cb.setEnabled(self.chk_auto.isChecked())
         self.lbl_every.setEnabled(self.chk_auto.isChecked())
         self.chk_raw.setChecked(sv("raw", True, bool))
+        self.chk_trig.setChecked(sv("trig_on", False, bool))
+        self.trig_pre.setValue(max(0, min(analysis.TRIG_PRE_MAX, sv("trig_pre", 5, int))))
+        self.trig_dur.setValue(max(analysis.TRIG_DUR_MIN, min(analysis.TRIG_DUR_MAX, sv("trig_dur", 60, int))))
+        self._sync_trig_widgets()
         self.chk_reconnect.setChecked(sv("reconnect", True, bool))
         self.seg_dfmt.set_value("binary" if sv("data_format", "text") == "binary" else "text")
         self._on_dfmt_changed(self.seg_dfmt.value())
@@ -1057,6 +1100,9 @@ class MainWindow(QMainWindow):
         s.setValue("autosave", "true" if self.chk_auto.isChecked() else "false")
         s.setValue("autosave_every", self.every_cb.currentData())
         s.setValue("raw", "true" if self.chk_raw.isChecked() else "false")
+        s.setValue("trig_on", "true" if self.chk_trig.isChecked() else "false")
+        s.setValue("trig_pre", self.trig_pre.value())
+        s.setValue("trig_dur", self.trig_dur.value())
         s.setValue("reconnect", "true" if self.chk_reconnect.isChecked() else "false")
         s.setValue("data_format", self._data_format)
         s.setValue("hex", "true" if self.chk_hex.isChecked() else "false")
@@ -1123,6 +1169,21 @@ class MainWindow(QMainWindow):
         self.lbl_idle.setEnabled(mode == "dma")
         self.win_cb.setEnabled(mode == "live")
         self._plot_sig = None
+        self._sync_trig_widgets()
+
+    def _sync_trig_widgets(self) -> None:
+        """Tetikli kayıt ayarları: sadece canlı modda ve bağlı değilken değiştirilebilir."""
+        if not hasattr(self, "chk_trig"):
+            return
+        live = self.seg_mode.value() == "live"
+        idle = self.engine is None
+        self.chk_trig.setEnabled(live and idle)
+        on = self.chk_trig.isChecked()
+        for w in (self.trig_pre, self.trig_dur, self.lbl_trig_pre, self.lbl_trig_dur):
+            w.setEnabled(live and idle and on)
+        self.trig_row.setVisible(on)
+        self.lbl_trig_hint.setVisible(on)
+        self.chk_trig.setToolTip(self.t("trig_tip") if live else self.t("trig_live_only"))
 
     @property
     def _data_format(self) -> str:
@@ -1181,10 +1242,13 @@ class MainWindow(QMainWindow):
         fs = self.fs_spin.value()
         port_name = "DEMO" if port == DEMO_PORT else port
 
+        trig = mode == "live" and self.chk_trig.isChecked()
+
         def factory():
             s = Session(mode=mode, seq_mode=seq_mode, channel_prefix=prefix,
                         port=port_name, baud=baud, sample_rate=fs)
             s.seq32 = dfmt == "binary"          # ikili çerçevede sıra no 32 bit
+            s.ephemeral = trig                  # tetikli kayıt: sürekli akış sadece arabellek
             return s
 
         reopen = None
@@ -1198,6 +1262,9 @@ class MainWindow(QMainWindow):
         self._conn_t0 = time.time()
         self._conn_info = (port_name, baud, mode)
         self._alarm_armed, self._alarm_fired_t, self._alarm_pending = {}, {}, {}
+        self._trig, self._trig_tail, self._trig_count = None, None, 0
+        self._conn_trig = trig
+        self._trig_pre_s, self._trig_dur_s = self.trig_pre.value(), self.trig_dur.value()
         self._rate.clear()
         self.view = self.engine.current
         self.banner.hide()
@@ -1209,6 +1276,13 @@ class MainWindow(QMainWindow):
         self._log(t("msg_connected", port=port_name, baud=baud, mode=t("mode_" + mode)), "ok")
         if dfmt == "binary":
             self._log(t("msg_binary_on"), "muted")
+        if trig:
+            n_rec = sum(1 for a in self._alarms if a["on"] and a.get("rec"))
+            if n_rec:
+                self._log(t("msg_trig_armed", n=n_rec, pre=self._trig_pre_s, dur=self._trig_dur_s), "info")
+            else:
+                self._log(t("msg_trig_noalarm"), "warn")
+                self._show_banner(t("msg_trig_noalarm"), "bad", show_open=False)
         if raw_path:
             self._log(t("msg_raw", path=raw_path), "muted")
         self._check_disk(folder)
@@ -1247,6 +1321,10 @@ class MainWindow(QMainWindow):
             QApplication.restoreOverrideCursor()
         self._drain_terminal(eng)
         self._drain_done(eng)
+        if self._trig is not None:            # bağlantı kesilince süren tetikli kayıt elde olanla kaydedilir
+            self._trig_finish(cut=True)
+        self._conn_trig = False
+        self._trig_tail = None
         self._set_controls_enabled(True)
         self._style_connect_button()
         self._set_status_dot(False)
@@ -1266,6 +1344,7 @@ class MainWindow(QMainWindow):
         if on and self._data_format == "binary":
             self.seq_cb.setEnabled(False)
         self.idle_spin.setEnabled(on and self.seg_mode.value() == "dma")
+        self._sync_trig_widgets()
         self.send_edit.setEnabled(not on)
         self.btn_send.setEnabled(not on)
         self.eol_cb.setEnabled(not on)
@@ -1295,7 +1374,7 @@ class MainWindow(QMainWindow):
                         self._disconnect(lost=msg or "processor")
                         return
                     if kind == "lost":
-                        self._log(self.t("msg_lost_retry", err=msg or "?"), "warn")
+                        self._log(self.t("msg_lost_retry_trig" if self._conn_trig else "msg_lost_retry", err=msg or "?"), "warn")
                         self._set_status_dot(False)
                     elif kind == "reconnected":
                         self._log(self.t("msg_reconnected"), "ok")
@@ -1383,6 +1462,7 @@ class MainWindow(QMainWindow):
                 s = eng.done_q.get_nowait()
                 self._alarm_scan_session(s, live=False)    # son satırlarına kadar (hızlı aktarımlar dahil)
                 self._alarm_scanned.pop(s, None)
+                self._trig_session_finished(s)
                 if s.n > 0 or s.saw_start or s.bad_lines:
                     self._on_session_done(s)
         except queue.Empty:
@@ -1390,6 +1470,13 @@ class MainWindow(QMainWindow):
 
     def _on_session_done(self, s: Session) -> None:
         t = self.t
+        if s.ephemeral:
+            # Tetikli kayıt modu: sürekli akış kaydedilmez; bölününce sessizce bırakılır (tetikler ayrı dosya)
+            if s.finish_reason not in ("segment", "lost") and s.n:
+                self.view = s
+                self._plot_sig = None
+                self._log(t("trig_buffer"), "muted")
+            return
         self.banner_session = s
         if s.n == 0:
             txt = t("banner_done_empty")
@@ -1506,7 +1593,13 @@ class MainWindow(QMainWindow):
     def _update_status_text(self) -> None:
         if self.engine is not None:
             port, baud, mode = self._conn_info
-            self.status_lbl.setText(f"{port} @ {baud} baud  ·  {self.t('mode_' + mode)}")
+            txt = f"{port} @ {baud} baud  ·  {self.t('mode_' + mode)}"
+            if self._conn_trig:
+                tr = self._trig
+                txt += "  ·  " + (self.t("trig_status", s=int(min(self._trig_dur_s, tr.get("el", 0))), d=self._trig_dur_s)
+                                  if tr else self.t("trig_waiting"))
+            if self.status_lbl.text() != txt:
+                self.status_lbl.setText(txt)
         else:
             self.status_lbl.setText(self.t("status_idle"))
 
@@ -1690,6 +1783,7 @@ class MainWindow(QMainWindow):
             if self.engine is eng:
                 self._alarm_scan_session(eng.current, live=True)
         self._flush_alarm_pending()
+        self._trig_update()
 
     def _flush_alarm_pending(self, force: bool = False) -> None:
         """Saniye sınırı yüzünden ayrıca yazılmayan tetikleri tek satırda özetler."""
@@ -1735,6 +1829,13 @@ class MainWindow(QMainWindow):
         t = self.t
         now = time.monotonic()
         label = self._alarm_label(a)
+        # Tetikli kayıt (saniye sınırından önce: aynı alarm kısa süre önce yazıldıysa bile tetik kaçmasın)
+        trig_busy = False
+        if a.get("rec") and s.ephemeral and self.engine is not None and self._conn_trig and t_host is not None:
+            if self._trig is None:
+                self._trig_start(label, s, row, t_host)
+            else:
+                trig_busy = True
         last = self._alarm_fired_t.get(i)
         if last is not None and last[1]() is s and now - last[0] < 1.0:
             pend = self._alarm_pending.setdefault((i, id(s)), [0, label, val])
@@ -1745,8 +1846,11 @@ class MainWindow(QMainWindow):
         self._alarm_fired_t[i] = (now, weakref.ref(s))
         more = t("a_more", n=count - 1) if count > 1 else ""
         self._log(t("msg_alarm", label=label, val=analysis.fmt(val), row=_fmt_int(row + 1)) + more, "error")
-        self._show_banner(t("alarm_banner", label=label, val=analysis.fmt(val),
-                            time=_dt.datetime.now().strftime("%H:%M:%S")), "bad", show_open=False)
+        if trig_busy:
+            self._log(t("msg_trig_busy", label=label), "muted")
+        if not (self._trig is not None and self._trig.get("row_src") is s and self._trig.get("row") == row):
+            self._show_banner(t("alarm_banner", label=label, val=analysis.fmt(val),
+                                time=_dt.datetime.now().strftime("%H:%M:%S")), "bad", show_open=False)
         k = self._alarm_notes.get(s, 0)
         if k < ALARM_NOTE_MAX:                       # kayıt notlarla dolmasın
             with s.lock:
@@ -1765,6 +1869,155 @@ class MainWindow(QMainWindow):
                 self._log(t("msg_sent", cmd=a["cmd"]), "info")
             except Exception as e:  # noqa: BLE001
                 self._log(t("msg_send_err", err=e), "error")
+
+    # ================================================================ TETİKLİ KAYIT
+    # Sürekli akış (ephemeral) oturumlar motor bölünce/koparsa birbirine bağlanır: eski.next_session -> yeni,
+    # yeni.prev_ref -> eski (zayıf). Tetikli kayıt parçaları bu zinciri izler; hangi oturumun hangi sırayla
+    # bittiğini tahmin etmek gerekmez (iki kontrol arasında birden çok bölünme olsa bile satır kaçmaz).
+    TRIG_GRACE = 0.5        # veri kesilse bile süre dolunca (bu pay kadar sonra) kayıt elde olanla biter
+
+    def _trig_pre_parts(self, s: Session, start: int, t0: float) -> list:
+        """Tetik, oturumun başına yakınsa önceki 'önce' saniyesini önceki oturum(lar)dan toplar."""
+        if start > 0 or self._trig_pre_s <= 0:
+            return []
+        parts, earliest = [], None
+        p = s.prev_ref() if s.prev_ref is not None else None
+        with s.lock:
+            if s.n and len(s.t_host) >= 1:
+                earliest = s.t_host[0]
+        while p is not None:                     # henüz bellekte duran önceki oturumlar (sırası bozulmaz)
+            with p.lock:
+                n = p.n
+                if not n or len(p.t_host) < n:
+                    break
+                i = bisect_left(p.t_host, t0, 0, n)
+                first = p.t_host[0]
+            if i < n:
+                parts.insert(0, (p, i, n))
+                earliest = first if i == 0 else p.t_host[i]
+            if i > 0 or first <= t0:
+                return parts
+            p = p.prev_ref() if p.prev_ref is not None else None
+        tail = self._trig_tail                   # zincir koptu: bölünen eski parçaların saklanan sonu
+        if tail is not None and tail.n:
+            i = bisect_left(tail.t_host, t0, 0, tail.n)
+            j = tail.n if earliest is None else bisect_left(tail.t_host, earliest, i, tail.n)
+            if j > i:
+                parts.insert(0, (tail, i, j))
+        return parts
+
+    def _trig_start(self, label: str, s: Session, row: int, t_trig: float) -> None:
+        """'Kaydı başlat' işaretli alarm tetiklendi: önceki 'önce' saniyeyle birlikte kayıt başlar."""
+        pre, dur = self._trig_pre_s, self._trig_dur_s
+        t0 = t_trig - pre
+        with s.lock:
+            n = s.n
+            if pre <= 0 or len(s.t_host) < n:
+                start = min(row, n)
+            else:
+                start = min(bisect_left(s.t_host, t0, 0, n), row)
+        parts = self._trig_pre_parts(s, start, t0)
+        before = sum(b - a for _, a, b in parts)
+        self._trig = {"parts": parts, "src": s, "start": start, "t_trig": t_trig, "t_end": t_trig + dur,
+                      "label": label, "row_src": s, "row": row, "clip_row": before + row - start, "el": 0.0}
+        self._log(self.t("msg_trig_start", label=label, dur=dur, pre=pre), "ok")
+        self._show_banner(self.t("banner_trig", label=label, dur=dur), "info", show_open=False)
+        self._update_status_text()
+
+    def _trig_update(self) -> None:
+        """Süren tetikli kaydın sonuna gelindi mi? (100 ms'de bir)"""
+        tr = self._trig
+        if tr is None:
+            if self._conn_trig:
+                self._update_status_text()
+            return
+        src = tr["src"]
+        eng = self.engine
+        if src is None:
+            return
+        end = None
+        with src.lock:
+            n = src.n
+            last = src.t_host[n - 1] if n and len(src.t_host) >= n else None
+            if last is not None and last >= tr["t_end"]:
+                end = bisect_right(src.t_host, tr["t_end"], tr["start"], n)
+            elif eng is not None and time.perf_counter() - eng.t0 >= tr["t_end"] + self.TRIG_GRACE \
+                    and src.next_session is None:
+                end = n                         # veri kesildi: süre doldu, elde olanla bitir
+        if last is not None:
+            tr["el"] = max(tr["el"], last - tr["t_trig"])
+        if end is not None:
+            tr["parts"].append((src, tr["start"], end))
+            tr["src"] = None
+            self._trig_finish(cut=False)
+        else:
+            self._update_status_text()
+
+    def _trig_session_finished(self, s: Session) -> None:
+        """Biten oturum: süren tetikli kayıt ondaysa elde olan kısmı al, zincirde bir sonrakine geç;
+        tetik arabelleğinin son 'önce' saniyesini sakla (sınıra yakın tetikler için)."""
+        tr = self._trig
+        if tr is not None and tr["src"] is s:
+            with s.lock:
+                n = s.n
+                last = s.t_host[n - 1] if n and len(s.t_host) >= n else None
+                done = last is not None and last >= tr["t_end"]
+                end = bisect_right(s.t_host, tr["t_end"], tr["start"], n) if done else n
+            tr["parts"].append((s, tr["start"], end))
+            nxt = s.next_session
+            if done or nxt is None:            # süre doldu ya da akış bitti (bağlantı kesildi / hata)
+                tr["src"] = None
+                self._trig_finish(cut=not done and self.engine is None)
+            else:
+                tr["src"], tr["start"] = nxt, 0
+        if s.ephemeral and self._trig_pre_s > 0 and s.next_session is not None:
+            with s.lock:
+                n = s.n
+                ok = bool(n) and len(s.t_host) >= n
+                cutoff = s.t_host[n - 1] - self._trig_pre_s if ok else 0.0
+            if ok:                             # son 'önce' saniye: önceki saklanan + bu oturum (kısa bölümler için)
+                parts = []
+                tail = self._trig_tail
+                if tail is not None and tail.n:
+                    i = bisect_left(tail.t_host, cutoff, 0, tail.n)
+                    if i < tail.n:
+                        parts.append((tail, i, tail.n))
+                with s.lock:
+                    j = bisect_left(s.t_host, cutoff, 0, n)
+                parts.append((s, j, n))
+                self._trig_tail = extract_session(parts, reason="tail")
+        elif s.ephemeral:
+            self._trig_tail = None
+
+    def _trig_finish(self, cut: bool) -> None:
+        tr, self._trig = self._trig, None
+        if tr is None:
+            return
+        parts = list(tr["parts"])
+        src = tr["src"]
+        if src is not None:                    # bağlantı kesildi: kaynakta ne varsa
+            with src.lock:
+                n = src.n
+            parts.append((src, tr["start"], n))
+        parts = [p for p in parts if p[2] > p[1]]
+        self._update_status_text()
+        if not parts:
+            return
+        t = self.t
+        clip = extract_session(parts, reason="trigger")
+        clip.name_tag = t("trig_file_tag")
+        row = min(max(0, tr["clip_row"]), max(0, clip.n - 1))
+        clip.add_note(t("note_trigger", label=tr["label"]), tr["t_trig"], row=row)
+        clip.notes.sort(key=lambda x: x[0])
+        self._trig_count += 1
+        k = self._trig_count
+        txt = t("msg_trig_cut" if cut else "msg_trig_done", k=k, n=_fmt_int(clip.n))
+        self._log(txt, "ok")
+        self._unsaved.append(clip)
+        self.banner_session = clip
+        self._banner_base = txt
+        self._show_banner(txt + "   ·   " + t("banner_saving"), "info", show_open=False)
+        self._save_session(clip, mode="auto")
 
     # ================================================================ KATLANABİLİR PANELLER
     def _cards(self) -> dict:
@@ -1826,7 +2079,8 @@ class MainWindow(QMainWindow):
         every = self.every_cb.currentData() or 0
         auto = (t("auto_every", m=every) if every else t("auto_end_only")) if self.chk_auto.isChecked() else t("auto_off_short")
         fmt_name = {"xlsx": "Excel", "csv": "CSV", "txt": "TXT"}[self.seg_fmt.value()]
-        self.card_save.set_summary(f"{fmt_name} · {auto}")
+        trig = (" · " + t("trig_short")) if self.chk_trig.isChecked() and self.seg_mode.value() == "live" else ""
+        self.card_save.set_summary(f"{fmt_name} · {auto}{trig}")
 
     @staticmethod
     def _bounds(x, ys):
