@@ -43,6 +43,7 @@
   - **Unit conversion:** per-channel scale, offset and unit (e.g. ADC counts → volts, with a one-click ADC helper). The chart, statistics and Excel/CSV export use the converted values.
 - **📝 Notes:** press **Ctrl+M** while recording to mark the moment (e.g. "motor on"). Notes appear on the chart, in a *Note* column in Excel/CSV and in the **Notes** tab.
 - **🔔 Threshold alarms:** when a channel crosses its threshold you get a warning banner, a threshold line on the chart and an automatic note on that row; optionally a sound and a command to the board (e.g. `STOP`). Hysteresis keeps a jittering signal from flooding alarms.
+- **⏺️ Triggered recording:** for unattended tests, save only the events. Mark an alarm as *Start rec.*; when it fires, the seconds before the trigger (0–60 s) and the set length after it are saved to their own file (`name_trigger_…`), then the next event is awaited. The continuous stream stays on screen but is not written to disk.
 - **Board detection:** STM32 (ST-Link), Arduino, ESP32, CH340, CP2102, FTDI and Raspberry Pi Pico ports are marked with ★.
 - **Send commands** to the board (e.g. `SEND` to request a new dump), as text or **HEX bytes**; **↑ / ↓** recalls previous commands. A **HEX view** shows the raw bytes.
 - **Quick command buttons:** turn commands you send often into buttons, optionally repeated at an interval (e.g. `READ` every 2 s).
@@ -138,8 +139,8 @@ On Windows you can also double-click **`baslat.bat`**: it sets everything up on 
 Tests: `pip install pytest && python -m pytest tests`
 
 ### Releasing a new version
-1. Set `__version__` in `stm32logger/__init__.py` (e.g. `3.0.0`).
-2. **Actions → Build Oskilo → Run workflow**, type the same version with a `v` (e.g. `v3.0.0`), then click **Run**.
+1. Set `__version__` in `stm32logger/__init__.py` (e.g. `3.1.0`).
+2. **Actions → Build Oskilo → Run workflow**, type the same version with a `v` (e.g. `v3.1.0`), then click **Run**.
 
 Windows and macOS builds are tested automatically, published under **Releases** together with `SHA256SUMS.txt` and build provenance, and the download buttons above always point to the latest one. The workflow refuses to publish if the two versions differ.
 

@@ -7,6 +7,7 @@ Kaynak koddan çalıştırma:
 Komut satırı seçenekleri:
     --reset-settings     tüm ayarları sıfırlayıp açar (ayar bozulduysa)
     --no-first-run       ilk açılış pencerelerini göstermez
+    --no-splash          açılış ekranını göstermez
     --selftest out.txt   uçtan uca otomatik test (CI)
 """
 import datetime
@@ -83,6 +84,13 @@ def _excepthook(exc_type, exc, tb):
         if QApplication.instance():
             from stm32logger.i18n import T
 
+            for w in QApplication.topLevelWidgets():    # açılış ekranı hata penceresini örtmesin
+                try:
+                    if w.windowFlags() & Qt.SplashScreen and w.isVisible():
+                        w.hide()
+                except Exception:  # noqa: BLE001
+                    pass
+
             box = QMessageBox(QMessageBox.Critical, "Oskilo", T(_ui_lang())("crash", path=path))
             box.setTextFormat(Qt.PlainText)
             box.setDetailedText(err[-4000:])
@@ -113,6 +121,36 @@ def _single_instance(app):
     return lock if box.clickedButton() is go else None
 
 
+def _show_splash():
+    """Açılış ekranı (ağır modüllerden önce). Bir sorun olursa uygulama açılış ekransız devam eder."""
+    if "--no-splash" in sys.argv:
+        return None
+    try:
+        from PySide6.QtWidgets import QApplication
+
+        from stm32logger import __version__
+        from stm32logger.system import app_settings
+        from stm32logger.ui.splash import Splash, splash_theme
+
+        mode, accent = splash_theme(app_settings())
+        sp = Splash(_ui_lang(), __version__, mode, accent)
+        sp.show()
+        sp.stage(0, "sp_s0")
+        QApplication.processEvents()
+        return sp
+    except Exception:  # noqa: BLE001
+        _append_log(_crash_log_path(), f"\n[splash] {traceback.format_exc()}")
+        return None
+
+
+def _stage(splash, i: int, key: str) -> None:
+    if splash is not None:
+        try:
+            splash.stage(i, key)
+        except Exception:  # noqa: BLE001
+            pass
+
+
 def main() -> int:
     global _fault_file
     sys.excepthook = _excepthook
@@ -131,7 +169,7 @@ def main() -> int:
         except Exception:
             pass
 
-    from PySide6.QtGui import QFont, QIcon
+    from PySide6.QtGui import QFont
     from PySide6.QtWidgets import QApplication
 
     app = QApplication(sys.argv)
@@ -154,6 +192,51 @@ def main() -> int:
     font.setPointSizeF(9.5)
     app.setFont(font)
 
+    splash = _show_splash()
+    try:
+        win = _load_and_build(splash)
+    except BaseException:
+        _close_splash(splash)              # hata penceresinin önünde kalmasın
+        raise
+    win.show()
+    if splash is not None:
+        try:
+            splash.finish(win)
+        except Exception:  # noqa: BLE001  açılış ekranı hiçbir zaman uygulamayı durdurmasın
+            _close_splash(splash)
+    if "--selftest" in sys.argv:
+        _selftest(app, win)
+    rc = app.exec()
+    if lock is not None:
+        lock.unlock()
+    return rc
+
+
+def _close_splash(splash) -> None:
+    if splash is None:
+        return
+    try:
+        splash.close()
+    except Exception:  # noqa: BLE001  (pencere zaten kapanmış/silinmiş olabilir)
+        pass
+
+
+def _load_and_build(splash):
+    """Ağır modülleri yükler ve ana pencereyi kurar. Aşamalar gerçek yükleme adımları:
+    açılış ekranındaki ilerleme neyin yüklendiğini gösterir."""
+    from PySide6.QtGui import QIcon
+    from PySide6.QtWidgets import QApplication
+
+    app = QApplication.instance()
+    _stage(splash, 1, "sp_s1")
+    import serial.tools.list_ports  # noqa: F401  (seri port sürücüsü)
+    _stage(splash, 2, "sp_s2")
+    from stm32logger import binary, engine  # noqa: F401  (CRC çözücü, okuma motoru)
+    _stage(splash, 3, "sp_s3")
+    import numpy  # noqa: F401
+    import pyqtgraph  # noqa: F401  (grafik motoru: en uzun süren adım)
+    _stage(splash, 4, "sp_s4")
+
     from stm32logger.ui import theme
     from stm32logger.ui.main_window import ASSETS, MainWindow
 
@@ -162,14 +245,7 @@ def main() -> int:
     if icon.exists():
         app.setWindowIcon(QIcon(str(icon)))
 
-    win = MainWindow()
-    win.show()
-    if "--selftest" in sys.argv:
-        _selftest(app, win)
-    rc = app.exec()
-    if lock is not None:
-        lock.unlock()
-    return rc
+    return MainWindow()
 
 
 def _selftest(app, win) -> None:

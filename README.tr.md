@@ -43,6 +43,7 @@
   - **Birim dönüşümü:** kanal başına çarpan, ofset ve birim (örn. ADC sayısı → Volt, tek tıkla ADC yardımcısı). Grafik, istatistik ve Excel/CSV çıktısı dönüştürülmüş değerleri kullanır.
 - **📝 Notlar:** kayıt sırasında **Ctrl+M** ile o ana not düşün (örn. "motor açıldı"). Not grafikte işaretlenir, Excel/CSV'de *Not* sütununa yazılır ve **Notlar** sekmesinde listelenir.
 - **🔔 Eşik alarmları:** kanal eşiği aşınca uyarı bandı, grafikte eşik çizgisi ve o satıra otomatik not; istenirse ses ve karta komut (örn. `STOP`). Geri dönüş payı sayesinde eşik etrafında titreyen sinyal alarm yağdırmaz.
+- **⏺️ Tetikli kayıt:** başında olmadığınız testlerde sadece olayları kaydedin. Bir alarmı *Kaydı başlat* olarak işaretleyin; alarm tetiklenince tetikten önceki saniyeler (0–60 sn) ve sonraki belirlenen süre ayrı bir dosyaya (`ad_tetik_…`) kaydedilir, ardından bir sonraki olay beklenir. Sürekli akış ekranda görünür ama diske yazılmaz.
 - **Kart tanıma:** STM32 (ST-Link), Arduino, ESP32, CH340, CP2102, FTDI ve Raspberry Pi Pico portları ★ ile işaretlenir.
 - **Karta komut gönderme** (örneğin yeni aktarım istemek için `GONDER`), yazı ya da **HEX bayt** olarak; **↑ / ↓** ile önceki komutlar geri gelir. **HEX görünüm** ham baytları gösterir.
 - **Hızlı komut butonları:** sık gönderdiğiniz komutları buton yapın; istenirse belirli aralıkla tekrar gönderilir (örn. her 2 s'de `OKU`).
@@ -138,8 +139,8 @@ Windows'ta **`baslat.bat`** dosyasına çift tıklamanız da yeterli; ilk seferd
 Testler: `pip install pytest && python -m pytest tests`
 
 ### Yeni sürüm yayınlamak
-1. `stm32logger/__init__.py` içindeki `__version__` değerini ayarlayın (örn. `3.0.0`).
-2. **Actions → Build Oskilo → Run workflow**'a tıklayın, sürüm kutusuna aynı sürümü başında `v` ile yazın (örn. `v3.0.0`) ve **Run**'a basın.
+1. `stm32logger/__init__.py` içindeki `__version__` değerini ayarlayın (örn. `3.1.0`).
+2. **Actions → Build Oskilo → Run workflow**'a tıklayın, sürüm kutusuna aynı sürümü başında `v` ile yazın (örn. `v3.1.0`) ve **Run**'a basın.
 
 Windows ve macOS sürümleri otomatik test edilip `SHA256SUMS.txt` ve derleme kanıtıyla birlikte **Releases**'a eklenir. Yukarıdaki indirme butonları her zaman en son sürümü indirir. İki sürüm numarası farklıysa iş akışı yayınlamayı reddeder.
 
