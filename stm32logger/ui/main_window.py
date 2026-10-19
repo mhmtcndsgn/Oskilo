@@ -269,8 +269,8 @@ class MainWindow(QMainWindow):
             act.setShortcuts([QKeySequence(k) for k in keys])
             act.setShortcutContext(Qt.WindowShortcut)
             self.addAction(act)
-        if not any(f in sys.argv for f in ("--selftest", "--no-first-run")):
-            QTimer.singleShot(500, self._first_run)
+        # ilk açılış soruları ana pencere ekrana gelince sorulsun (açılış ekranının arkasında kalmasın)
+        self._first_run_due = not any(f in sys.argv for f in ("--selftest", "--no-first-run"))
 
     # ================================================================ ARAYÜZ
     def _build(self) -> None:
@@ -3059,6 +3059,12 @@ class MainWindow(QMainWindow):
         has_manifest = getattr(sys, "frozen", False) and os.path.exists(system.manifest_path())
         AboutDialog(self, self.lang, str(ASSETS / "icon.png"), can, self._do_unblock, self._check_updates,
                     on_verify=self._verify_files if has_manifest else None).exec()
+
+    def showEvent(self, ev) -> None:  # noqa: N802
+        super().showEvent(ev)
+        if getattr(self, "_first_run_due", False):
+            self._first_run_due = False
+            QTimer.singleShot(500, self._first_run)
 
     def closeEvent(self, ev) -> None:
         if not self._confirm_discard():

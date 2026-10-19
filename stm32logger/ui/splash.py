@@ -5,9 +5,14 @@ QtCore/QtGui/QtWidgets ve hafif uygulama modülleri kullanılır. Aşamalar ger�
 bağlıdır (main.py her adımdan önce stage() çağırır): ilerleme gerçekten ne yüklendiğini gösterir.
 Python yükleme sırasında birkaç yüz ms meşgul kalabilir; bu yüzden tasarım sürekli harekete değil
 adım adım yanan aşamalara dayanır, donma göze batmaz.
+
+Hızlı bilgisayarda yükleme yarım saniyenin altında biter; o zaman ekran görünmeden kaybolurdu. Bu yüzden
+aşamalar en az STEP saniye arayla yanar ve ekran toplam en az MIN_SHOW saniye görünür. Yükleme zaten
+uzun sürerse ek bekleme olmaz. Tıklamak (veya bir tuş) beklemeyi atlar.
 """
 from __future__ import annotations
 
+import time
 from pathlib import Path
 
 from PySide6.QtCore import QEasingCurve, QPointF, QPropertyAnimation, QRectF, Qt, QTimer
@@ -35,6 +40,9 @@ _ICONS = {
 STAGES = (("chip", "sp_board"), ("plug", "sp_port"), ("shield", "sp_check"), ("chart", "sp_chart"), ("file", "sp_save"))
 # her aşama bitince ilerleme çizgisinin varacağı yer (grafik motoru ve arayüz en uzun süren adımlar)
 WEIGHTS = (0.06, 0.16, 0.26, 0.62, 0.92)
+STEP = 0.22        # iki aşamanın yanması arasındaki en kısa süre (sn)
+MIN_SHOW = 1.5     # açılış ekranının en az görünme süresi (sn), kaybolma hariç
+FADE_MS = 220
 
 
 def _icon(name: str, color: str, px: int, dpr: float) -> QPixmap:
@@ -70,9 +78,16 @@ class Splash(QWidget):
         th.apply(mode, accent)
         self.c = {k: getattr(th, k) for k in ("BG", "BG_PANEL", "BG_RAISED", "BORDER", "BORDER_SOFT", "TEXT",
                                               "MUTED", "FAINT", "ACCENT_TXT", "MODE")}
-        self.lit = 0                           # yanan aşama sayısı
+        self.lit = 0                           # ekranda yanan aşama sayısı
+        self.req = 0                           # yüklemenin gerçekten ulaştığı aşama sayısı
+        self.keys: dict[int, str] = {}         # aşama -> durum yazısı anahtarı
         self.status = self.t("sp_s0")
         self.target = self.shown = 0.0         # ilerleme (0..1): hedef ve ekranda çizilen
+        self.t0 = time.perf_counter()
+        self.skip = False                      # kullanıcı tıkladı: bekleme yok
+        self._win = None                       # hazır olan ana pencere (finish ile gelir)
+        self._fading = False
+        self._fade = None
         self._icons: dict = {}
         logo = ASSETS / "icon.png"
         self.logo = QPixmap(str(logo)) if logo.exists() else QPixmap()
@@ -84,45 +99,115 @@ class Splash(QWidget):
 
     # ------------------------------------------------------------ dış arayüz
     def stage(self, i: int, status_key: str | None = None) -> None:
-        """i. aşamaya geçildi (0..4): o aşama yanar, ilerleme oraya doğru gider."""
-        self.lit = max(self.lit, min(len(STAGES), i + 1))
-        self.target = max(self.target, WEIGHTS[min(i, len(WEIGHTS) - 1)])
+        """Yükleme i. aşamaya geçti (0..4). Ekranda o aşama, sıra gelince (en az STEP arayla) yanar."""
+        i = max(0, min(len(STAGES) - 1, i))
+        self.req = max(self.req, i + 1)
         if status_key:
-            self.status = self.t(status_key)
+            self.keys[i] = status_key
+        self._pace()
         if not self.anim.isActive():
             self.anim.start()
         self.repaint()
         QApplication.processEvents()
 
     def finish(self, win) -> None:
-        """Ana pencere hazır: ilerleme tamamlanır, açılış ekranı yumuşakça kaybolur."""
-        self.lit, self.target, self.shown = len(STAGES), 1.0, 1.0
+        """Ana pencere hazır. Kalan aşamalar sırayla yanar, "Hazır" görünür; en az MIN_SHOW saniye
+        dolunca ana pencere gösterilir ve açılış ekranı yumuşakça kaybolur."""
+        self._win = win
+        if not self.isVisible():               # kullanıcı açılış ekranını kapatmış: beklemeden aç
+            self._show_win()
+            self.anim.stop()
+            return
+        self.req = len(STAGES)
+        if not self.anim.isActive():
+            self.anim.start()
+        self._pace()
+
+    def mousePressEvent(self, _ev) -> None:  # noqa: N802
+        self._skip()
+
+    def keyPressEvent(self, _ev) -> None:  # noqa: N802
+        self._skip()
+
+    def closeEvent(self, ev) -> None:  # noqa: N802
+        # ne olursa olsun ana pencere görünmeden kalmasın
+        self._show_win()
+        super().closeEvent(ev)
+
+    # ------------------------------------------------------------ iç işleyiş
+    def _elapsed(self) -> float:
+        return time.perf_counter() - self.t0
+
+    def _skip(self) -> None:
+        self.skip = True
+        self._pace()
+
+    def _pace(self) -> None:
+        """Ekranda görünen aşamayı yüklemenin ulaştığı aşamaya, en az STEP arayla yaklaştırır."""
+        if self._fading:
+            return
+        n = len(STAGES)
+        el = self._elapsed()
+        allowed = n if self.skip else 1 + int(el / STEP)
+        lit = min(self.req, allowed, n)
+        if lit > self.lit:
+            self.lit = lit
+            self.target = max(self.target, WEIGHTS[lit - 1])
+            key = self.keys.get(lit - 1)
+            if key:
+                self.status = self.t(key)
+        if self._win is None or self.lit < n:
+            return
+        # yükleme bitti, bütün aşamalar yandı: son aşama da kısa bir süre görünsün, sonra "Hazır"
+        if self.skip or el >= n * STEP:
+            self.status = self.t("sp_ready")
+            self.target = 1.0
+        if self.skip or (el >= MIN_SHOW and self.shown >= 0.985):
+            self._start_fade()
+
+    def _show_win(self) -> None:
+        win, self._win = self._win, None
+        if win is None:
+            return
+        try:
+            if not win.isVisible():
+                win.show()
+            win.raise_()
+            win.activateWindow()
+        except RuntimeError:   # pencere silinmiş olabilir
+            pass
+
+    def _start_fade(self) -> None:
+        self._fading = True
+        self.target = self.shown = 1.0
         self.status = self.t("sp_ready")
-        self.repaint()
         self.anim.stop()
+        self.repaint()
+        self._show_win()
         fade = QPropertyAnimation(self, b"windowOpacity", self)
-        fade.setDuration(220)
+        fade.setDuration(FADE_MS)
         fade.setStartValue(1.0)
         fade.setEndValue(0.0)
         fade.setEasingCurve(QEasingCurve.InCubic)
         fade.finished.connect(self._done)
         QTimer.singleShot(120, fade.start)      # ana pencere ekrana çizilsin, sonra kaybol
         self._fade = fade
-        if win is not None:
-            win.raise_()
-            win.activateWindow()
 
     def _done(self) -> None:
         self.close()
         self.deleteLater()
 
     def _step_anim(self) -> None:
+        self._pace()
+        if self._fading:
+            return
         d = self.target - self.shown
         if abs(d) < 0.002:
             self.shown = self.target
-            self.anim.stop()
+            if self._win is None and self.lit >= self.req:
+                self.anim.stop()                # yükleme sürüyor, gösterilecek yeni bir şey yok
         else:
-            self.shown += d * 0.18
+            self.shown += d * (0.4 if self.target >= 1.0 else 0.18)   # son dolum hızlı: ek bekleme olmasın
         self.update()
 
     # ------------------------------------------------------------ çizim
@@ -180,7 +265,7 @@ class Splash(QWidget):
         sub_f = _font(MONO_FONTS, 6.2)
         for i, (icon, key) in enumerate(STAGES):
             on = i < self.lit
-            cur = on and (i == self.lit - 1) and self.shown < 0.999
+            cur = on and (i == self.lit - 1) and self.target < 0.999
             x = xs[i]
             if on:
                 halo = QColor(acc)
