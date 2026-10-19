@@ -123,6 +123,12 @@ class Session:
         self.units: dict = {}                 # dışa aktarımda kullanılan birim dönüşümleri (arayüz verir)
         self.saved_notes = 0                  # dosyaya yazılan not sayısı
         self.imported = False                 # dosyadan açıldı (değerler zaten dönüştürülmüş olabilir)
+        self.ephemeral = False                # tetikli kayıt modunda sürekli akış: sadece ekran/arabellek,
+                                              # kendisi kaydedilmez (tetiklenen parçalar ayrı oturum olur)
+        self.name_tag = ""                    # dosya adına eklenen etiket (ör. "tetik")
+        # tetik arabelleği zinciri (motor bölünce/koparsa doldurur): sonraki oturum (güçlü) ve önceki (zayıf)
+        self.next_session: Session | None = None
+        self.prev_ref = None
 
     def add_note(self, text: str, t: float, row: int | None = None) -> int:
         """Not ekler; notun bağlandığı satırı döndürür (verilmezse o anki son satır)."""
@@ -131,7 +137,9 @@ class Session:
         return row
 
     def unsaved(self) -> bool:
-        """Dosyaya yazılmamış satır ya da not var mı?"""
+        """Dosyaya yazılmamış satır ya da not var mı? (Tetik arabelleği hiçbir zaman 'kaydedilmemiş' sayılmaz.)"""
+        if self.ephemeral:
+            return False
         return self.n > self.saved_n or len(self.notes) > self.saved_notes
 
     def mark_saved(self) -> None:
@@ -146,6 +154,7 @@ class Session:
         """
         self.header = list(old.header) if old.header else None
         self.seq32 = old.seq32
+        self.ephemeral = old.ephemeral
         if self.seq_mode == "auto" and old.has_seq is not None:
             self.has_seq = old.has_seq
         self._ncols = old._ncols
@@ -404,3 +413,80 @@ class Session:
     def duration_s(self) -> float:
         end = self.ended_at or _dt.datetime.now()
         return (end - self.started_at).total_seconds()
+
+
+def extract(parts, reason: str = "trigger") -> "Session":
+    """Bir ya da birkaç ardışık oturum parçasından yeni bir oturum üretir (tetikli kayıt).
+
+    parts: [(oturum, başlangıç_satırı, bitiş_satırı), ...] — aynı bağlantının art arda gelen
+    oturumları (canlı kayıt bölünmüş olabilir). Kanallar adlarına göre hizalanır, eksik kanal NaN olur.
+    Notlar ve (sıra no varsa) aradaki kayıplar da taşınır; PC zamanları değişmez.
+    """
+    base = parts[0][0]
+    out = Session(mode=base.mode, seq_mode=base.seq_mode, channel_prefix=base.channel_prefix,
+                  port=base.port, baud=base.baud, sample_rate=base.sample_rate)
+    out.seq32 = base.seq32
+    out.header = list(base.header) if base.header else None
+    names: list[str] = []
+    for s, _a, _b in parts:
+        for nm in s.channels:
+            if nm not in names:
+                names.append(nm)
+    out.channels = names
+    out.cols = [array("d") for _ in names]
+    has_seq = True
+    first_t = last_t = None
+    prev_last_seq = None
+    for s, a, b in parts:
+        with s.lock:
+            b = max(0, min(int(b), s.n))
+            a = max(0, min(int(a), b))
+            k = b - a
+            if not k:
+                continue
+            for j, nm in enumerate(names):
+                if nm in s.channels:
+                    out.cols[j].extend(s.cols[s.channels.index(nm)][a:b])
+                else:
+                    out.cols[j].extend(array("d", [NAN]) * k)
+            th = s.t_host[a:b] if len(s.t_host) >= b else array("d", [NAN]) * k
+            out.t_host.extend(th)
+            if first_t is None:
+                first_t = (s, th[0])
+            last_t = (s, th[-1])
+            seq_ok = bool(s.has_seq) and len(s.seq) >= b
+            if seq_ok:
+                out.seq.extend(s.seq[a:b])
+                lo, hi = s.seq[a], s.seq[b - 1]
+                if prev_last_seq is not None and lo > prev_last_seq + 1:
+                    out.gaps.append(Gap(prev_last_seq, lo))
+                out.gaps.extend(Gap(g.after_seq, g.next_seq) for g in s.gaps if g.after_seq >= lo and g.next_seq <= hi)
+                prev_last_seq = hi
+            else:
+                has_seq = False
+            for row, t, txt in s.notes:
+                if a <= row < b:
+                    out.notes.append((out.n + row - a, t, txt))
+            out.n += k
+    out.has_seq = has_seq and out.n > 0
+    if not out.has_seq:
+        out.seq = array("q")
+        out.gaps = []
+    out._touched = True
+
+    def _at(ref):
+        s, t = ref
+        try:
+            t0 = s.t_host[0]
+            return s.started_at + _dt.timedelta(seconds=float(t - t0)) if math.isfinite(t - t0) else s.started_at
+        except (IndexError, OverflowError, ValueError):
+            return s.started_at
+
+    if first_t is not None:
+        out.started_at = _at(first_t)
+        out.ended_at = _at(last_t)
+    else:
+        out.ended_at = out.started_at
+    out.finish_reason = reason
+    out.notes.sort(key=lambda x: x[0])
+    return out

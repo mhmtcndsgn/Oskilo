@@ -25,6 +25,7 @@ import queue
 import random
 import threading
 import time
+import weakref
 from typing import Callable
 
 from . import binary
@@ -415,6 +416,9 @@ class Engine:
         new = self.session_factory()
         if reason in ("segment", "lost"):
             new.continue_from(old, keep_seq=reason == "segment")
+            if old.ephemeral:                  # tetikli kayıt: arayüz parçaları bu zincirle izler
+                old.next_session = new
+                new.prev_ref = weakref.ref(old)
         self.current = new
         self.done_q.put(old)
 

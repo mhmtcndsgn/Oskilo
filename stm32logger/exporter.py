@@ -146,7 +146,8 @@ def summary_rows(s: Session, lang: str, n: int | None = None, notes=None, units=
 
 def default_filename(s: Session, prefix: str, fmt: str) -> str:
     stamp = s.started_at.strftime("%Y-%m-%d_%H-%M-%S")
-    return f"{safe_prefix(prefix)}_{stamp}{FORMATS[fmt]}"
+    tag = f"_{s.name_tag}" if getattr(s, "name_tag", "") else ""
+    return f"{safe_prefix(prefix)}{tag}_{stamp}{FORMATS[fmt]}"
 
 
 def _replace(tmp: str, path: str) -> None:

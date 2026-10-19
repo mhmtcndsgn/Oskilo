@@ -195,6 +195,8 @@ def sanitize_cmds(raw) -> list[dict]:
 
 # ------------------------------------------------------------------ eşik alarmları
 MAX_ALARMS = 16
+TRIG_PRE_MAX = 60          # tetikli kayıt: tetikten önce en fazla bu kadar saniye kayda girer
+TRIG_DUR_MIN, TRIG_DUR_MAX = 1, 3600
 
 
 def sanitize_alarms(raw) -> list[dict]:
@@ -213,7 +215,8 @@ def sanitize_alarms(raw) -> list[dict]:
         if not ch or not math.isfinite(thr) or not math.isfinite(hyst):
             continue
         out.append({"on": bool(a.get("on", True)), "ch": ch, "op": op, "value": thr, "hyst": hyst,
-                    "beep": bool(a.get("beep", False)), "cmd": str(a.get("cmd", "") or "")[:200]})
+                    "beep": bool(a.get("beep", False)), "cmd": str(a.get("cmd", "") or "")[:200],
+                    "rec": bool(a.get("rec", False))})
     return out
 
 

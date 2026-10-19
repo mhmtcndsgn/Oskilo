@@ -113,7 +113,17 @@ GUIDE: dict[str, dict[str, tuple[str, str, str]]] = {
                 (9, "Şimdi kaydet", "Ekrandaki kaydı hemen dosyasına yazar. Kısayol: <b>Ctrl+S</b>. Kart katlıyken de görünür."),
                 (10, "Farklı kaydet", "İstediğiniz ad ve biçimde ayrı bir kopya. Kısayol: <b>Ctrl+Shift+S</b>. Sonradan eklenen notlar da bu dosyaya yazılır."))
             + TIP("🛟", "Kaydedilmemiş veri varken pencereyi kapatırsanız, yeniden bağlanırsanız ya da dosya açarsanız uygulama sorar. "
-                        "Dosyalar önce geçici adla yazılır, bitince asıl adını alır; yarım dosya oluşmaz.")),
+                        "Dosyalar önce geçici adla yazılır, bitince asıl adını alır; yarım dosya oluşmaz.")
+            + "<h3>Tetikli kayıt (sadece olayları kaydet)</h3>"
+            "<p>Uzun süre başında olmadığınız testlerde her şeyi değil, sadece bir şey olduğunda kaydetmek için. Canlı modda çalışır.</p>"
+            + S((1, "Alarmı işaretleyin", "<b>Veri ayarları → Eşik alarmları…</b> penceresinde kaydı başlatacak alarmların <b>Kaydı başlat</b> kutusunu işaretleyin."),
+                (2, "Tetikli kaydı açın", "<b>Kayıt</b> kartında <b>Tetikli kayıt (alarmla başlat)</b>. <b>Önce</b>: tetikten önceki kaç saniye de kayda girsin (0–60, varsayılan 5). "
+                    "<b>Süre</b>: tetikten sonra kaç saniye kaydedilsin (varsayılan 60)."),
+                (3, "Bağlanın", "Durum çubuğunda <i>Tetik bekleniyor</i> yazar. Sürekli akış ekranda görünür ama dosyaya yazılmaz."),
+                (4, "Olay olunca", "Kayıt başlar, durum çubuğunda süre sayılır. Süre dolunca olay <code>ad_tetik_2026-…</code> adıyla ayrı bir dosyaya kaydedilir; "
+                    "tetik anı dosyada <b>▶ Tetik</b> notuyla işaretlidir. Sonra bir sonraki olay beklenir."))
+            + TIP("⏱️", "Kayıt sürerken gelen yeni alarm yeni kayıt başlatmaz, mevcut kayda not olarak düşer. Bağlantıyı keserseniz süren kayıt o ana kadarki haliyle kaydedilir. "
+                        "Ekrandaki sürekli akışı yine de saklamak isterseniz <b>Şimdi kaydet</b>'e basın.")),
         "longrun": ("Uzun testler (günler, haftalar)", "Bilgisayarı günlerce kayıtta bırakacaksanız bu sayfayı okuyun.",
             "<h3>Uygulama kendiliğinden ne yapar?</h3>"
             + S(("✓", "Ara kayıt", "Canlı izlemede kayıt seçtiğiniz aralıkla (varsayılan 5 dk) aynı dosyaya yazılır."),
@@ -166,7 +176,8 @@ GUIDE: dict[str, dict[str, tuple[str, str, str]]] = {
                 (2, "Eşik çizgisi", "Grafikte kırmızı kesikli çizgi."),
                 (3, "Otomatik not", "Alarmın olduğu satıra not düşülür: grafikte sarı çizgi, Excel'de <b>Not</b> sütunu."))
             + TIP("🔔", "<b>Geri dönüş payı</b>: değer eşiğin bu kadar gerisine inmeden alarm yeniden kurulmaz; eşik etrafında titreyen sinyal alarm yağdırmaz. "
-                        "<b>Ses</b> ve <b>karta komut</b> (ör. <code>STOP</code>) isteğe bağlıdır; aynı alarm saniyede en fazla bir kez not, ses ve komut üretir.")),
+                        "<b>Ses</b> ve <b>karta komut</b> (ör. <code>STOP</code>) isteğe bağlıdır; aynı alarm saniyede en fazla bir kez not, ses ve komut üretir. "
+                        "<b>Kaydı başlat</b>: alarm tetiklenince olayı ayrı bir dosyaya kaydeder (bkz. <i>Kayıt ve dosyalar → Tetikli kayıt</i>).")),
         "look": ("Tema ve kısayollar", "Uygulamayı istediğiniz renklerde kullanın.",
             "<p>Sağ üstteki renkli yuvarlak butondan seçin:</p>"
             + S(("🌗", "Görünüm", "<b>Koyu</b>, <b>Açık</b> ya da <b>Sistem</b> (Windows'un koyu/açık ayarına uyar)."),
@@ -282,7 +293,17 @@ GUIDE: dict[str, dict[str, tuple[str, str, str]]] = {
                 (9, "Save now", "Writes the recording on screen to its file right away. Shortcut: <b>Ctrl+S</b>. Stays visible when the card is collapsed."),
                 (10, "Save as", "A separate copy with any name and format. Shortcut: <b>Ctrl+Shift+S</b>. Notes added later also go to this file."))
             + TIP("🛟", "If a recording is not saved yet, the app asks before you close the window, connect again or open a file. "
-                        "Files are written under a temporary name first and renamed when complete, so no half-written files.")),
+                        "Files are written under a temporary name first and renamed when complete, so no half-written files.")
+            + "<h3>Triggered recording (save only the events)</h3>"
+            "<p>For tests you leave unattended: instead of everything, save only when something happens. Works in live mode.</p>"
+            + S((1, "Mark the alarm", "In <b>Data settings → Threshold alarms…</b> tick <b>Start rec.</b> for the alarms that should start a recording."),
+                (2, "Turn on triggered recording", "In the <b>Save</b> card: <b>Triggered recording (start on alarm)</b>. <b>Before</b>: how many seconds before the trigger are included (0–60, default 5). "
+                    "<b>Length</b>: how many seconds are recorded after the trigger (default 60)."),
+                (3, "Connect", "The status bar shows <i>Waiting for trigger</i>. The continuous stream is shown on screen but not written to a file."),
+                (4, "When an event happens", "Recording starts and the status bar counts the seconds. When the time is up the event is saved to its own file named <code>name_trigger_2026-…</code>; "
+                    "the trigger moment is marked with a <b>▶ Trigger</b> note. Then the next event is awaited."))
+            + TIP("⏱️", "An alarm during a recording does not start a new one; it is added to the current recording as a note. If you disconnect, the running recording is saved as it is. "
+                        "To keep the continuous stream on screen as well, press <b>Save now</b>.")),
         "longrun": ("Long tests (days, weeks)", "Read this before leaving the computer recording for days.",
             "<h3>What the app does on its own</h3>"
             + S(("✓", "Interim saves", "In live monitor mode the recording is written to the same file at your interval (default 5 min)."),
@@ -335,7 +356,8 @@ GUIDE: dict[str, dict[str, tuple[str, str, str]]] = {
                 (2, "Threshold line", "A dashed red line on the chart."),
                 (3, "Automatic note", "A note is added on the row where the alarm fired: yellow line on the chart, <b>Note</b> column in Excel."))
             + TIP("🔔", "<b>Hysteresis</b>: the alarm re-arms only after the value moves back by this much, so a signal jittering around the threshold does not flood alarms. "
-                        "<b>Sound</b> and <b>command to board</b> (e.g. <code>STOP</code>) are optional; the same alarm produces at most one note, sound and command per second.")),
+                        "<b>Sound</b> and <b>command to board</b> (e.g. <code>STOP</code>) are optional; the same alarm produces at most one note, sound and command per second. "
+                        "<b>Start rec.</b>: saves the event to its own file when the alarm fires (see <i>Saving and files → Triggered recording</i>).")),
         "look": ("Theme and shortcuts", "Use the app in the colors you like.",
             "<p>Use the colored round button at the top right:</p>"
             + S(("🌗", "Appearance", "<b>Dark</b>, <b>Light</b> or <b>System</b> (follows Windows' dark/light setting)."),
