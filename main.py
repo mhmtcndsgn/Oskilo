@@ -198,12 +198,17 @@ def main() -> int:
     except BaseException:
         _close_splash(splash)              # hata penceresinin önünde kalmasın
         raise
-    win.show()
+    if splash is None or "--selftest" in sys.argv:
+        win.show()
     if splash is not None:
         try:
-            splash.finish(win)
+            splash.finish(win)             # ana pencereyi, açılış ekranı en az ~1,5 sn görününce açar
         except Exception:  # noqa: BLE001  açılış ekranı hiçbir zaman uygulamayı durdurmasın
             _close_splash(splash)
+        # güvenlik ağı: açılış ekranında beklenmedik bir sorun olsa da ana pencere mutlaka açılsın
+        from PySide6.QtCore import QTimer
+
+        QTimer.singleShot(4000, lambda: None if win.isVisible() else win.show())
     if "--selftest" in sys.argv:
         _selftest(app, win)
     rc = app.exec()
