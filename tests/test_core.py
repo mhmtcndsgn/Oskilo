@@ -1,4 +1,5 @@
 """Çekirdek testleri:  python -m pytest tests  (ya da: python tests/test_core.py)"""
+import math
 import os
 import sys
 import tempfile
@@ -730,7 +731,8 @@ def test_alarm_scan_and_sanitize():
     assert len(hits) == 50 and armed is False       # son örnek eşik üstünde: alarm tetikli kalır
     assert a.sanitize_alarms([{"ch": "K1", "op": ">", "value": "3.3"}, {"ch": "", "value": 1},
                               {"ch": "K2", "value": "x"}, 5]) == \
-        [{"on": True, "ch": "K1", "op": ">", "value": 3.3, "hyst": 0.0, "beep": False, "cmd": ""}]
+        [{"on": True, "ch": "K1", "op": ">", "value": 3.3, "hyst": 0.0, "beep": False, "cmd": "", "rec": False}]
+    assert a.sanitize_alarms([{"ch": "K1", "value": 1, "rec": True}])[0]["rec"] is True
 
 
 
@@ -758,3 +760,73 @@ def test_binary_flush_and_seq32():
         s.add(0.0, parse_line(f"{i},1"))
     s.flush_pending()
     assert max(s.seq) < 65536 and s.missing < 100, (s.missing, list(s.seq)[-3:])
+
+
+def test_trigger_extract_and_ephemeral():
+    """Tetikli kayıt: parçalardan oturum üretme (kanal hizalama, notlar, sıra kaybı), arabellek kaydedilmez."""
+    from stm32logger.parser import parse_line
+    from stm32logger.session import Session, extract
+    from stm32logger.exporter import default_filename
+
+    a = Session(mode="live", seq_mode="on")
+    for i in range(10):
+        a.add(i * 0.1, parse_line(f"{i},{i * 2},{i * 3}"))
+    a.add_note("n1", 0.5, row=5)
+    a.finish("segment")
+    b = Session(mode="live", seq_mode="on")
+    b.continue_from(a, keep_seq=True)
+    for i in list(range(10, 14)) + list(range(16, 20)):            # 14,15 kayıp
+        b.add(i * 0.1, parse_line(f"{i},{i * 2},{i * 3}"))
+    b.finish("stop")
+    a.ephemeral = b.ephemeral = True
+    assert not a.unsaved() and not b.unsaved()                       # arabellek "kaydedilmemiş" sayılmaz
+    c = extract([(a, 4, 10), (b, 0, 6)])
+    assert c.n == 12 and c.channels == a.channels and not c.ephemeral and c.unsaved()
+    assert list(c.seq) == [4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 16, 17]
+    assert [(g.after_seq, g.next_seq) for g in c.gaps] == [(13, 16)] and c.missing == 2
+    assert c.notes == [(1, 0.5, "n1")]
+    assert abs(c.t_host[0] - 0.4) < 1e-9 and c.finish_reason == "trigger"
+    assert c.cols[0][0] == 8.0 and c.cols[1][-1] == 51.0
+    # parçalar arası kayıp da yakalanır, eksik kanal NaN olur
+    d = Session(mode="live", seq_mode="on")
+    for i in range(30, 33):
+        d.add(i, parse_line(f"{i},1,2,3"))
+    e = extract([(a, 8, 10), (d, 0, 3)])
+    assert e.n == 5 and len(e.channels) == 3 and [(g.after_seq, g.next_seq) for g in e.gaps] == [(9, 30)]
+    assert math.isnan(e.cols[2][0]) and e.cols[2][-1] == 3.0
+    # boş parça ve dosya adı etiketi
+    assert extract([(a, 5, 5)]).n == 0
+    c.name_tag = "tetik"
+    assert "_tetik_" in default_filename(c, "olcum", "csv")
+
+
+def test_trigger_chain_links():
+    """Tetik arabelleği bölününce oturumlar birbirine bağlanır (arayüz parçaları sırayla izleyebilsin)."""
+    def factory():
+        s = Session(mode="live", seq_mode="on")
+        s.ephemeral = True
+        return s
+
+    data = b"".join(f"{i},{i}\n".encode() for i in range(35))
+    eng = Engine(_FakeSerial([data]), mode="live", session_factory=factory, segment_rows=10)
+    eng.start()
+    deadline = time.time() + 5
+    while eng.total_lines < 35 and time.time() < deadline:
+        time.sleep(0.02)
+    eng.stop()
+    done = []
+    while not eng.done_q.empty():
+        done.append(eng.done_q.get())
+    assert [s.finish_reason for s in done] == ["segment", "segment", "segment", "stop"]
+    for a, b in zip(done, done[1:]):
+        assert a.next_session is b and b.prev_ref() is a
+    assert done[-1].next_session is None and all(not s.unsaved() for s in done)
+    # normal (tetiksiz) kayıtlar zincirlenmez: bellekte birbirini tutmasın
+    eng = Engine(_FakeSerial([data]), mode="live", session_factory=lambda: Session(mode="live"), segment_rows=10)
+    eng.start()
+    deadline = time.time() + 5
+    while eng.total_lines < 35 and time.time() < deadline:
+        time.sleep(0.02)
+    eng.stop()
+    first = eng.done_q.get()
+    assert first.next_session is None and first.unsaved()
