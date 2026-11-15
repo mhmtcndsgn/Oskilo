@@ -27,7 +27,7 @@ You will get an answer within a few days. Only the latest release receives fixes
 
 - Needs **no administrator rights**, installs no service or driver, changes no system settings.
 - Communicates only with the serial port you select and writes only to the folder you choose (plus a small crash log: Windows `%LOCALAPPDATA%\Oskilo`, macOS `~/Library/Logs/Oskilo`).
-- Makes **one** network request, and only when you click *Check for updates*: it reads the latest version number from the GitHub API (HTTPS only, size-limited) and can open this repository's Releases page in your browser. It never downloads or runs anything by itself.
+- Network access is only for updates (HTTPS only, size-limited): at most once a day at startup (can be turned off) and when you click *Check for updates*, it reads the latest release info from the GitHub API. It downloads a new version **only after you confirm**, and only files attached to this repository's releases. Before anything is replaced, the download must match `SHA256SUMS.txt` of the same release, the zip must not contain paths outside its `Oskilo/` folder, and every extracted file must match the new build's fingerprint list. The old files are kept until the new version has started; if it fails to start they are restored automatically. Log: `%LOCALAPPDATA%\Oskilo\oskilo_guncelleme.txt`.
 - Treats all data from the board as untrusted: long or malformed lines are ignored, channel count is limited (64), numbers that overflow become empty cells, and channel names are written to CSV/Excel in a way that cannot run as a formula.
 
 ## Antivirus false positives
@@ -54,7 +54,7 @@ Güvenlik sorunları için lütfen herkese açık *issue* **açmayın**. Bu repo
 ### Uygulama ne yapar, ne yapmaz?
 - **Yönetici izni istemez**, servis/sürücü kurmaz, sistem ayarlarını değiştirmez.
 - Sadece seçtiğiniz seri portla haberleşir ve seçtiğiniz klasöre yazar (ayrıca küçük bir hata kaydı: Windows'ta `%LOCALAPPDATA%\Oskilo`, macOS'ta `~/Library/Logs/Oskilo`).
-- Tek ağ isteği, siz *Güncellemeleri kontrol et*'e bastığınızda GitHub'dan son sürüm numarasını okumaktır (sadece HTTPS, boyutu sınırlı). Kendiliğinden hiçbir şey indirmez ya da çalıştırmaz.
+- Ağ erişimi sadece güncelleme içindir (sadece HTTPS, boyutu sınırlı): açılışta günde en fazla bir kez (kapatılabilir) ve *Güncellemeleri kontrol et*'e bastığınızda GitHub'dan son sürüm bilgisi okunur. Yeni sürüm **ancak siz onaylarsanız** ve sadece bu reponun sürüm dosyalarından indirilir. Hiçbir dosya değiştirilmeden önce indirme aynı sürümdeki `SHA256SUMS.txt` ile, açılan her dosya da yeni derlemenin parmak izi listesiyle karşılaştırılır; zip `Oskilo/` klasörü dışına dosya yazamaz. Eski dosyalar yeni sürüm açılana kadar saklanır; yeni sürüm açılamazsa otomatik geri konur. Kayıt: `%LOCALAPPDATA%\Oskilo\oskilo_guncelleme.txt`.
 - Karttan gelen veriye güvenmez: çok uzun/bozuk satırlar yok sayılır, kanal sayısı 64 ile sınırlıdır, taşan sayılar boş hücre olur, kanal adları CSV/Excel'de formül olarak çalışamayacak şekilde yazılır.
 
 ### Antivirüs yanlış alarmı

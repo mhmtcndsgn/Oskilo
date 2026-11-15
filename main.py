@@ -9,6 +9,13 @@ Komut satırı seçenekleri:
     --no-first-run       ilk açılış pencerelerini göstermez
     --no-splash          açılış ekranını göstermez
     --selftest out.txt   uçtan uca otomatik test (CI)
+
+Uygulama içi güncellemenin kullandığı (elle çağrılmaz):
+    --apply-update ... yeni sürümü yerleştiren yardımcı mod (stm32logger/updater.py)
+    --rollback-update  yarıda kalmış güncellemeyi geri alan yardımcı mod
+    --update-probe     yeni sürüm açılabiliyor mu (Qt + ana pencere modülleri yüklenip çıkılır)
+    --updated-from v   güncellemeden sonraki ilk açılış
+    --update-failed    güncelleme geri alındı, kullanıcıya bildirilir
 """
 import datetime
 import faulthandler
@@ -153,6 +160,30 @@ def _stage(splash, i: int, key: str) -> None:
 
 def main() -> int:
     global _fault_file
+    if "--apply-update" in sys.argv or "--rollback-update" in sys.argv:
+        # güncelleme yardımcısı: Qt yüklenmeden, pencere açmadan çalışır
+        try:
+            from stm32logger import updater
+
+            if "--rollback-update" in sys.argv:
+                return updater.rollback_main(sys.argv)
+            return updater.apply_main(sys.argv)
+        except Exception:  # noqa: BLE001  (penceresiz çalışır: hatayı kayda yaz)
+            _append_log(_crash_log_path(), f"\n[update] {traceback.format_exc()}")
+            return 1
+    if "--update-probe" in sys.argv:
+        return _update_probe()
+    try:                                    # yarıda kalmış ya da süren bir güncelleme var mı?
+        from stm32logger import updater
+
+        pf = updater.preflight(sys.argv)
+    except Exception:  # noqa: BLE001
+        _append_log(_crash_log_path(), f"\n[preflight] {traceback.format_exc()}")
+        pf = None
+    if pf in ("busy", "delegated"):
+        return 0
+    if pf == "broken":
+        return 1
     sys.excepthook = _excepthook
     try:   # Python seviyesinde yakalanamayan çökmeler (ör. sürücü hatası) de kayda geçsin
         _fault_file = open(_log_dir() / "oskilo_cokme.txt", "a", encoding="utf-8")
@@ -198,6 +229,12 @@ def main() -> int:
     except BaseException:
         _close_splash(splash)              # hata penceresinin önünde kalmasın
         raise
+    try:                                    # güncellemeden sonra: yeni sürüm açılabildi
+        from stm32logger import updater
+
+        updater.mark_started(sys.argv)
+    except Exception:  # noqa: BLE001
+        pass
     if splash is None or "--selftest" in sys.argv:
         win.show()
     if splash is not None:
@@ -215,6 +252,25 @@ def main() -> int:
     if lock is not None:
         lock.unlock()
     return rc
+
+
+def _update_probe() -> int:
+    """Güncelleme yardımcısı yeni sürümü yerleştirdikten sonra çağırır: Qt ve ana pencere
+    modülleri yüklenebiliyor mu? Pencere açılmaz, ayar ve kilit dosyasına dokunulmaz."""
+    try:
+        from PySide6.QtWidgets import QApplication
+
+        app = QApplication.instance() or QApplication([sys.argv[0]])
+        import numpy  # noqa: F401
+        import pyqtgraph  # noqa: F401
+
+        from stm32logger.ui import main_window, splash, update_dialog  # noqa: F401
+
+        app.processEvents()
+        return 0
+    except Exception:  # noqa: BLE001
+        _append_log(_crash_log_path(), f"\n[update-probe] {traceback.format_exc()}")
+        return 3
 
 
 def _close_splash(splash) -> None:

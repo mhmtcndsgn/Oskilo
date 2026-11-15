@@ -44,6 +44,7 @@
 - **📝 Notlar:** kayıt sırasında **Ctrl+M** ile o ana not düşün (örn. "motor açıldı"). Not grafikte işaretlenir, Excel/CSV'de *Not* sütununa yazılır ve **Notlar** sekmesinde listelenir.
 - **🔔 Eşik alarmları:** kanal eşiği aşınca uyarı bandı, grafikte eşik çizgisi ve o satıra otomatik not; istenirse ses ve karta komut (örn. `STOP`). Geri dönüş payı sayesinde eşik etrafında titreyen sinyal alarm yağdırmaz.
 - **⏺️ Tetikli kayıt:** başında olmadığınız testlerde sadece olayları kaydedin. Bir alarmı *Kaydı başlat* olarak işaretleyin; alarm tetiklenince tetikten önceki saniyeler (0–60 sn) ve sonraki belirlenen süre ayrı bir dosyaya (`ad_tetik_…`) kaydedilir, ardından bir sonraki olay beklenir. Sürekli akış ekranda görünür ama diske yazılmaz.
+- **🔄 Uygulama içi güncelleme (Windows):** Yeni sürüm çıkınca üstte bir bant belirir. **Güncelle**'ye basınca yeni sürüm indirilir, `SHA256SUMS.txt` ve derlemenin dosya listesiyle doğrulanır, Oskilo yeni sürümle yeniden açılır. Yeni sürüm açılamazsa önceki sürüm otomatik geri gelir. macOS'ta yeni `.dmg` indirilip açılır.
 - **Kart tanıma:** STM32 (ST-Link), Arduino, ESP32, CH340, CP2102, FTDI ve Raspberry Pi Pico portları ★ ile işaretlenir.
 - **Karta komut gönderme** (örneğin yeni aktarım istemek için `GONDER`), yazı ya da **HEX bayt** olarak; **↑ / ↓** ile önceki komutlar geri gelir. **HEX görünüm** ham baytları gösterir.
 - **Hızlı komut butonları:** sık gönderdiğiniz komutları buton yapın; istenirse belirli aralıkla tekrar gönderilir (örn. her 2 s'de `OKU`).
@@ -139,17 +140,18 @@ Windows'ta **`baslat.bat`** dosyasına çift tıklamanız da yeterli; ilk seferd
 Testler: `pip install pytest && python -m pytest tests`
 
 ### Yeni sürüm yayınlamak
-1. `stm32logger/__init__.py` içindeki `__version__` değerini ayarlayın (örn. `3.1.0`).
-2. **Actions → Build Oskilo → Run workflow**'a tıklayın, sürüm kutusuna aynı sürümü başında `v` ile yazın (örn. `v3.1.0`) ve **Run**'a basın.
+1. `stm32logger/__init__.py` içindeki `__version__` değerini ayarlayın (örn. `3.2.0`).
+2. **Actions → Build Oskilo → Run workflow**'a tıklayın, sürüm kutusuna aynı sürümü başında `v` ile yazın (örn. `v3.2.0`) ve **Run**'a basın.
+3. Test sürümü için ayrıca **prerelease** kutusunu işaretleyin: sürüm "Pre-release" olarak çıkar, "latest" olmaz ve sadece **? → Test sürümlerini de al** açık olan uygulamalara önerilir. Sorunsuzsa GitHub'da sürümü düzenleyip *pre-release* işaretini kaldırın ve en son sürüm yapın.
 
-Windows ve macOS sürümleri otomatik test edilip `SHA256SUMS.txt` ve derleme kanıtıyla birlikte **Releases**'a eklenir. Yukarıdaki indirme butonları her zaman en son sürümü indirir. İki sürüm numarası farklıysa iş akışı yayınlamayı reddeder.
+Windows ve macOS sürümleri otomatik test edilip (Windows'ta uygulama içi güncelleme de gerçek exe ile denenir: kapanışta, yeniden başlatarak, başka pencere açıkken, yarıda kalan güncelleme, açılamayan yeni sürüm) `SHA256SUMS.txt` ve derleme kanıtıyla birlikte **Releases**'a eklenir. Yukarıdaki indirme butonları her zaman en son sürümü indirir. İki sürüm numarası farklıysa iş akışı yayınlamayı reddeder.
 
 ---
 
 ## 🔒 Güvenlik
 
 - Sürümler sadece bu reponun GitHub Actions'ında derlenir: sabitlenmiş action'lar, parmak izi kontrollü bağımlılıklar, sadece okuma yetkili token, SHA-256 özetleri ve imzalı derleme kanıtı.
-- Uygulama yönetici izni istemez; kendiliğinden hiçbir şey indirmez ya da çalıştırmaz.
+- Uygulama yönetici izni istemez. Yeni sürümü ancak siz **Güncelle**'ye basınca, sadece bu reponun sürümlerinden ve SHA-256 ile doğrulayarak indirir.
 - Karttan gelen veriye güvenilmez (uzunluk / kanal sınırı, formül çalıştıramayan CSV/Excel çıktısı).
 - Bir güvenlik açığı bulursanız lütfen gizli bildirin: **[SECURITY.md](SECURITY.md)**.
 
@@ -163,7 +165,7 @@ Windows sürümleri yalnızca bu repodaki herkese açık GitHub Actions iş akı
 - **Onaylayan:** [mhmtcndsgn](https://github.com/mhmtcndsgn)
 
 ### Gizlilik
-Bu program, kullanıcı özellikle istemedikçe hiçbir bilgiyi ağ üzerinden başka bir sisteme göndermez. Yalnızca seçtiğiniz seri cihazla haberleşir ve seçtiğiniz klasöre dosya yazar. Tek ağ isteği, **Güncellemeleri kontrol et**'e bastığınızda GitHub'dan son sürüm numarasının okunmasıdır. **Hata bildir** sadece tarayıcınızda bir GitHub sayfası açar; siz göndermedikçe hiçbir şey gönderilmez.
+Bu program verilerinizi ya da ölçümlerinizi ağ üzerinden başka bir sisteme göndermez. Yalnızca seçtiğiniz seri cihazla haberleşir ve seçtiğiniz klasöre dosya yazar. Tek ağ istekleri güncelleme içindir: açılışta günde en fazla bir kez (**? → Açılışta güncellemeleri denetle** ile kapatılabilir) ve **Güncellemeleri kontrol et**'e bastığınızda GitHub'dan son sürüm bilgisi okunur; yeni sürüm ancak siz onaylarsanız GitHub'dan indirilir. **Hata bildir** sadece tarayıcınızda bir GitHub sayfası açar; siz göndermedikçe hiçbir şey gönderilmez.
 
 ---
 

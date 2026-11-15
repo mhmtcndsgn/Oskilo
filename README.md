@@ -44,6 +44,7 @@
 - **📝 Notes:** press **Ctrl+M** while recording to mark the moment (e.g. "motor on"). Notes appear on the chart, in a *Note* column in Excel/CSV and in the **Notes** tab.
 - **🔔 Threshold alarms:** when a channel crosses its threshold you get a warning banner, a threshold line on the chart and an automatic note on that row; optionally a sound and a command to the board (e.g. `STOP`). Hysteresis keeps a jittering signal from flooding alarms.
 - **⏺️ Triggered recording:** for unattended tests, save only the events. Mark an alarm as *Start rec.*; when it fires, the seconds before the trigger (0–60 s) and the set length after it are saved to their own file (`name_trigger_…`), then the next event is awaited. The continuous stream stays on screen but is not written to disk.
+- **🔄 In-app updates (Windows):** when a new version is out, a bar appears at the top. **Update** downloads it, checks it against `SHA256SUMS.txt` and the build's file list, then restarts Oskilo on the new version. If the new version fails to start, the previous one is restored automatically. On macOS the new `.dmg` is downloaded and opened.
 - **Board detection:** STM32 (ST-Link), Arduino, ESP32, CH340, CP2102, FTDI and Raspberry Pi Pico ports are marked with ★.
 - **Send commands** to the board (e.g. `SEND` to request a new dump), as text or **HEX bytes**; **↑ / ↓** recalls previous commands. A **HEX view** shows the raw bytes.
 - **Quick command buttons:** turn commands you send often into buttons, optionally repeated at an interval (e.g. `READ` every 2 s).
@@ -139,10 +140,11 @@ On Windows you can also double-click **`baslat.bat`**: it sets everything up on 
 Tests: `pip install pytest && python -m pytest tests`
 
 ### Releasing a new version
-1. Set `__version__` in `stm32logger/__init__.py` (e.g. `3.1.0`).
-2. **Actions → Build Oskilo → Run workflow**, type the same version with a `v` (e.g. `v3.1.0`), then click **Run**.
+1. Set `__version__` in `stm32logger/__init__.py` (e.g. `3.2.0`).
+2. **Actions → Build Oskilo → Run workflow**, type the same version with a `v` (e.g. `v3.2.0`), then click **Run**.
+3. For a test version, also tick **prerelease**: it is published as a pre-release, is not marked latest, and is only offered to apps with **? → Include test versions** turned on. When it is good, edit the release on GitHub, untick *pre-release* and set it as latest.
 
-Windows and macOS builds are tested automatically, published under **Releases** together with `SHA256SUMS.txt` and build provenance, and the download buttons above always point to the latest one. The workflow refuses to publish if the two versions differ.
+Windows and macOS builds are tested automatically (on Windows the in-app update is also exercised with the real exe: update on exit, restart, another window open, interrupted update, broken new version), published under **Releases** together with `SHA256SUMS.txt` and build provenance, and the download buttons above always point to the latest one. The workflow refuses to publish if the two versions differ.
 
 ### Project layout
 ```
@@ -168,7 +170,7 @@ SECURITY.md                 security policy and how releases are protected
 ## 🔒 Security
 
 - Releases are built only by GitHub Actions from this repository, with pinned actions, hash-checked dependencies, a read-only token, SHA-256 checksums and signed build provenance.
-- The app needs no administrator rights and never downloads or runs anything by itself.
+- The app needs no administrator rights. It downloads a new version only after you click **Update**, and only from this repository's releases, verified by SHA-256.
 - Data from the board is treated as untrusted (length / channel limits, formula-safe CSV/Excel export).
 - Found a vulnerability? Please report it privately, see **[SECURITY.md](SECURITY.md)**.
 
@@ -182,7 +184,7 @@ Windows builds are produced only by the public GitHub Actions workflow in this r
 - **Approvers:** [mhmtcndsgn](https://github.com/mhmtcndsgn)
 
 ### Privacy policy
-This program does not transfer any information to other networked systems unless specifically requested by the user. It only communicates with the serial device you select and writes files to the folder you choose. The only network request is made when you click **Check for updates**: it reads the latest version number from the GitHub API. **Report a problem** only opens a GitHub page in your browser; nothing is sent until you submit it yourself.
+This program does not send any of your data or measurements to other networked systems. It only communicates with the serial device you select and writes files to the folder you choose. The only network requests are for updates: at most once a day at startup (can be turned off under **? → Check for updates at startup**) and when you click **Check for updates**, the latest version info is read from the GitHub API; the new version is downloaded from GitHub only after you confirm. **Report a problem** only opens a GitHub page in your browser; nothing is sent until you submit it yourself.
 
 ---
 
