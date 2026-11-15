@@ -28,7 +28,7 @@ from PySide6.QtWidgets import (QApplication, QCheckBox, QComboBox, QDoubleSpinBo
                                QToolButton, QVBoxLayout, QWidget)
 
 from .. import APP_NAME, __version__
-from .. import analysis, system
+from .. import analysis, system, updater
 from ..engine import DEMO_PORT, Engine, list_ports, open_port
 from ..exporter import FORMATS, default_filename, export_session
 from ..i18n import T
@@ -158,6 +158,8 @@ class MainWindow(QMainWindow):
         self._export_threads: list[threading.Thread] = []
         self._reserved: set[str] = set()   # yazılmakta olan dosyalar (aynı ada iki kayıt olmasın)
         self._unsaved: list[Session] = []   # biten ama kaydedilmemiş kayıtlar (kapatırken sorulur)
+        self._pending_update: dict | None = None   # indirilmiş, kapanışta uygulanacak güncelleme
+        self._upd_banner_text = None               # (anahtar, biçim değerleri): dil değişince yeniden yazılır
         self._rate = collections.deque()
         self._conn_t0 = 0.0
         self._conn_info = ("", 0, "live")
@@ -329,12 +331,19 @@ class MainWindow(QMainWindow):
         self.act_guide = QAction(self.help_menu, triggered=lambda: self.show_help())
         self.act_guide.setShortcut(QKeySequence("F1"))
         self.act_updates = QAction(self.help_menu, triggered=self._check_updates)
+        self.act_upd_auto = QAction(self.help_menu, checkable=True)
+        self.act_upd_auto.toggled.connect(lambda on: self.settings.setValue("upd_auto", bool(on)))
+        self.act_upd_beta = QAction(self.help_menu, checkable=True)
+        self.act_upd_beta.toggled.connect(lambda on: self.settings.setValue("upd_beta", bool(on)))
         self.act_report = QAction(self.help_menu, triggered=self._report_issue)
         self.act_about = QAction(self.help_menu, triggered=self._show_about)
         self.act_reset = QAction(self.help_menu, triggered=self._reset_settings)
         self.help_menu.addAction(self.act_guide)
         self.help_menu.addSeparator()
         self.help_menu.addAction(self.act_updates)
+        self.help_menu.addAction(self.act_upd_auto)
+        self.help_menu.addAction(self.act_upd_beta)
+        self.help_menu.addSeparator()
         self.help_menu.addAction(self.act_report)
         self.help_menu.addAction(self.act_reset)
         self.help_menu.addSeparator()
@@ -577,6 +586,26 @@ class MainWindow(QMainWindow):
         bl.addWidget(self.banner_close)
         self.banner.hide()
         v.addWidget(self.banner)
+        # güncelleme bandı (kayıt bandından ayrı: biri diğerini kapatmasın)
+        self.upd_banner = QFrame()
+        self.upd_banner.setObjectName("Banner")
+        self.upd_banner.setProperty("state", "info")
+        ub = QHBoxLayout(self.upd_banner)
+        ub.setContentsMargins(14, 8, 8, 8)
+        self.upd_banner_lbl = QLabel()
+        self.upd_banner_lbl.setTextFormat(Qt.PlainText)
+        self.upd_banner_btn = QPushButton()
+        self.upd_banner_btn.setObjectName("Link")
+        self.upd_banner_btn.clicked.connect(lambda: self._upd_banner_action and self._upd_banner_action())
+        self._upd_banner_action = None
+        upd_close = QPushButton("✕")
+        upd_close.setObjectName("Link")
+        upd_close.clicked.connect(self.upd_banner.hide)
+        ub.addWidget(self.upd_banner_lbl, 1)
+        ub.addWidget(self.upd_banner_btn)
+        ub.addWidget(upd_close)
+        self.upd_banner.hide()
+        v.addWidget(self.upd_banner)
 
         split = self.splitter = QSplitter(Qt.Vertical)
         split.setChildrenCollapsible(False)
@@ -787,6 +816,11 @@ class MainWindow(QMainWindow):
         self.btn_help.setToolTip(t("help_btn") + "  (F1)")
         self.act_guide.setText(t("menu_guide"))
         self.act_updates.setText(t("menu_updates"))
+        self.act_upd_auto.setText(t("menu_upd_auto"))
+        self.act_upd_beta.setText(t("menu_upd_beta"))
+        self.act_upd_beta.setToolTip(t("menu_upd_beta_tip"))
+        if self._upd_banner_text is not None:          # dil değişti: görünürlüğe dokunmadan yeniden yaz
+            self._set_upd_banner(*self._upd_banner_text, show=False)
         self.act_report.setText(t("menu_report"))
         self.act_about.setText(t("menu_about"))
         self.act_reset.setText(t("menu_reset"))
@@ -1028,6 +1062,8 @@ class MainWindow(QMainWindow):
         self.trig_dur.setValue(max(analysis.TRIG_DUR_MIN, min(analysis.TRIG_DUR_MAX, sv("trig_dur", 60, int))))
         self._sync_trig_widgets()
         self.chk_reconnect.setChecked(sv("reconnect", True, bool))
+        self.act_upd_auto.setChecked(sv("upd_auto", True, bool))
+        self.act_upd_beta.setChecked(sv("upd_beta", False, bool))
         self.seg_dfmt.set_value("binary" if sv("data_format", "text") == "binary" else "text")
         self._on_dfmt_changed(self.seg_dfmt.value())
         self.chk_hex.setChecked(sv("hex", False, bool))
@@ -3025,29 +3061,172 @@ class MainWindow(QMainWindow):
 
         threading.Thread(target=job, name="bg", daemon=True).start()
 
+    # ================================================================ GÜNCELLEME
     def _check_updates(self) -> None:
+        """Menüden: GitHub'daki son sürümü sorar, yeni sürüm varsa güncellemeyi önerir."""
         t = self.t
         self.statusBar().showMessage(t("upd_checking"), 5000)
         self._log(t("upd_checking"), "info")
+        beta = self.act_upd_beta.isChecked()
 
         def ok(res):
+            self.settings.setValue("upd_last", time.time())
             if res["newer"]:
-                box = QMessageBox(self)
-                box.setIconPixmap(status_icon("info"))
-                box.setWindowTitle(t("menu_updates"))
-                box.setText(t("upd_new", new=res["latest"], cur=__version__))
-                go = box.addButton(t("upd_open"), QMessageBox.AcceptRole)
-                box.addButton(t("later"), QMessageBox.RejectRole)
-                box.exec()
-                if box.clickedButton() is go:
-                    QDesktopServices.openUrl(QUrl(res["url"]))
+                self._offer_update(res)
             else:
                 self._msg("info", t("menu_updates"), t("upd_latest", cur=__version__))
 
         def err(e):
             self._msg("warn", t("menu_updates"), t("upd_err", err=e))
 
-        self._run_bg(system.check_latest, ok, err)
+        self._run_bg(lambda: updater.find_update(beta), ok, err)
+
+    def _update_startup(self) -> None:
+        """Açılıştan kısa süre sonra: güncellemenin sonucu, hazır bekleyen güncelleme, günlük kontrol."""
+        t = self.t
+        try:
+            st = updater.startup(sys.argv)
+        except Exception as e:  # noqa: BLE001
+            self._log(f"update: {e!r}", "muted")
+            st = {}
+        if st.get("updated_from"):
+            self._set_upd_banner("upd_banner_done", {"new": __version__}, None)
+            self._log(t("upd_banner_done", new=__version__), "ok")
+        if st.get("failed"):
+            if self._ask(t("menu_updates"), t("upd_failed", log=st["failed"]), t("upd_open")) is True:
+                QDesktopServices.openUrl(QUrl(f"{system.REPO_URL}/releases"))
+        elif "--update-postponed" in sys.argv:
+            self._msg("info", t("menu_updates"), t("upd_postponed"))
+        if st.get("pending"):
+            p = st["pending"]
+            self._pending_update = {"helper": p["helper"], "version": p["version"], "restart": False}
+            self._set_upd_banner("upd_banner_ready", {"new": p["version"]}, self._restart_for_update)
+            return
+        if not any(f in sys.argv for f in ("--selftest", "--updated-from")):
+            self._auto_check_updates()
+
+    def _auto_check_updates(self) -> None:
+        """Günde en fazla bir kez, sessizce: yeni sürüm varsa üstte bir bant gösterir."""
+        if not self.act_upd_auto.isChecked():
+            return
+        last = self._sv("upd_last", 0.0, float)
+        if 0 <= time.time() - last < 20 * 3600:
+            return
+        beta = self.act_upd_beta.isChecked()
+
+        def ok(res):
+            self.settings.setValue("upd_last", time.time())
+            if (res["newer"] and res["latest"] != self._sv("upd_skip", "", str)
+                    and self._pending_update is None):
+                self._set_upd_banner("upd_banner_new", {"new": res["latest"]}, lambda: self._offer_update(res))
+
+        self._run_bg(lambda: updater.find_update(beta), ok, lambda e: None)   # hata: sessiz (çevrimdışı olabilir)
+
+    def _set_upd_banner(self, key: str, kw: dict, action, show: bool = True) -> None:
+        t = self.t
+        self._upd_banner_text = (key, kw, action)
+        self.upd_banner_lbl.setText(t(key, **kw))
+        self._upd_banner_action = action
+        self.upd_banner_btn.setVisible(action is not None)
+        btn = {"upd_banner_new": "upd_now", "upd_banner_ready": "upd_restart_short"}.get(key)
+        if btn:
+            self.upd_banner_btn.setText(t(btn))
+        if show:
+            self.upd_banner.show()
+
+    def _offer_update(self, res: dict) -> None:
+        t = self.t
+        ver = res["latest"]
+        p = self._pending_update
+        if p is not None and p.get("version") == ver:
+            self._ready_dialog(ver)
+            return
+        mode = updater.mode()
+        text = t("upd_new2", new=ver, cur=__version__)
+        if res.get("prerelease"):
+            text += "\n\n" + t("upd_pre")
+        if mode == "page":
+            text += "\n\n" + t("upd_page_only")
+        box = QMessageBox(self)
+        box.setIconPixmap(status_icon("info"))
+        box.setWindowTitle(t("menu_updates"))
+        box.setTextFormat(Qt.PlainText)
+        box.setText(text)
+        go = box.addButton(t({"replace": "upd_now", "dmg": "upd_dmg_btn"}.get(mode, "upd_open")),
+                           QMessageBox.AcceptRole)
+        notes = box.addButton(t("upd_notes"), QMessageBox.HelpRole) if mode != "page" else None
+        skip = box.addButton(t("upd_skip"), QMessageBox.DestructiveRole)
+        later = box.addButton(t("later"), QMessageBox.RejectRole)
+        box.setDefaultButton(go)
+        box.setEscapeButton(later)
+        box.exec()
+        c = box.clickedButton()
+        if c is go:
+            if mode == "page":
+                QDesktopServices.openUrl(QUrl(res["url"]))
+            else:
+                self.upd_banner.hide()
+                self._start_update(res, mode)
+        elif notes is not None and c is notes:
+            QDesktopServices.openUrl(QUrl(res["url"]))
+        elif c is skip:
+            self.settings.setValue("upd_skip", ver)
+            self.upd_banner.hide()
+
+    def _start_update(self, res: dict, mode: str) -> None:
+        from .update_dialog import UpdateDialog
+
+        t = self.t
+        rel = {"version": res["latest"], "assets": res["assets"], "url": res["url"]}
+        if mode == "replace":                          # yeni indirme eskisinin yerini alır
+            self._pending_update = None
+            self.upd_banner.hide()
+        if mode == "replace":
+            fn = lambda progress, cancel: updater.prepare_windows(rel, progress=progress, cancel=cancel)  # noqa: E731
+        else:
+            fn = lambda progress, cancel: updater.download_dmg(rel, progress=progress, cancel=cancel)  # noqa: E731
+        dlg = UpdateDialog(self, t, t("upd_title", new=res["latest"]))
+        kind, val = dlg.run(fn)
+        dlg.deleteLater()
+        if kind == "cancel":
+            if mode == "replace":
+                updater._force_rmtree(updater.install_dir() / updater.NEW_DIR)
+            self.statusBar().showMessage(t("upd_cancelled"), 5000)
+            return
+        if kind == "err":
+            msg = t(val.key, **val.kw) if isinstance(val, updater.UpdateError) else t("upd_err_generic", err=val)
+            self._log(msg, "error")
+            if self._ask(t("menu_updates"), msg, t("upd_open")) is True:
+                QDesktopServices.openUrl(QUrl(res["url"]))
+            return
+        if mode == "replace":
+            self._pending_update = {"helper": val, "version": res["latest"], "restart": False}
+            self._ready_dialog(res["latest"])
+        else:
+            QDesktopServices.openUrl(QUrl.fromLocalFile(str(val)))
+            if self._ask(t("menu_updates"), t("upd_dmg_done", path=str(val)), t("upd_quit")) is True:
+                self.close()
+
+    def _ready_dialog(self, ver: str) -> None:
+        t = self.t
+        ans = self._ask(t("menu_updates"), t("upd_ready", new=ver), t("upd_restart"), t("upd_on_exit"))
+        if ans is True:
+            self._restart_for_update()
+        else:
+            self._set_upd_banner("upd_banner_ready", {"new": ver}, self._restart_for_update)
+
+    def _restart_for_update(self) -> None:
+        t = self.t
+        p = self._pending_update
+        if p is None:
+            return
+        if self.engine is not None and self._ask(t("menu_updates"), t("upd_connected"), t("upd_restart")) is not True:
+            return
+        p["restart"] = True
+        if not self.close():                         # kullanıcı kapatmaktan vazgeçti
+            p["restart"] = False
+            self._pending_update = p
+            self._set_upd_banner("upd_banner_ready", {"new": p["version"]}, self._restart_for_update)
 
     def _report_issue(self) -> None:
         QDesktopServices.openUrl(QUrl(system.issue_url(self.lang)))
@@ -3062,6 +3241,9 @@ class MainWindow(QMainWindow):
 
     def showEvent(self, ev) -> None:  # noqa: N802
         super().showEvent(ev)
+        if not getattr(self, "_shown_once", False):
+            self._shown_once = True
+            QTimer.singleShot(1500, self._update_startup)
         if getattr(self, "_first_run_due", False):
             self._first_run_due = False
             QTimer.singleShot(500, self._first_run)
@@ -3078,3 +3260,10 @@ class MainWindow(QMainWindow):
             return
         self._save_settings()
         super().closeEvent(ev)
+        if self._pending_update is not None:
+            p = self._pending_update
+            self._pending_update = None
+            try:
+                updater.launch_helper(p["helper"], restart=p.get("restart", False))
+            except Exception as e:  # noqa: BLE001  güncelleme başlatılamadı: uygulama yine de kapansın
+                updater._Log(updater.update_log_path())(f"yardımcı başlatılamadı: {e!r}")
