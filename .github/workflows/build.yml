@@ -5,6 +5,8 @@ name: Build Oskilo
 #   sürüm kutusuna örn. v2.1.0 yaz > Run. Sürüm, stm32logger/__init__.py içindeki
 #   __version__ ile aynı olmalı. Derleme bitince Releases'a eklenir; README'deki
 #   indirme butonları otomatik olarak bu sürümü indirir.
+# - Test sürümü: aynı şekilde, "prerelease" kutusunu işaretle. GitHub'da "Pre-release"
+#   olarak çıkar, "latest" olmaz; README butonları ve normal kullanıcılar etkilenmez.
 #
 # Güvenlik:
 # - Varsayılan yetki sadece "okuma". Yazma yetkisi yalnızca yayın (release) adımında.
@@ -23,6 +25,11 @@ on:
         description: "Yayınlanacak sürüm (örn. v2.1.0). Boş bırakırsan sadece derler, yayınlamaz."
         required: false
         default: ""
+      prerelease:
+        description: "Test (ön) sürümü olarak yayınla. Sadece 'Test sürümlerini de al' açık olan Oskilo'lar görür."
+        type: boolean
+        required: false
+        default: false
 
 permissions:
   contents: read
@@ -96,6 +103,12 @@ jobs:
           Get-Content selftest.txt
           if ($p.ExitCode -ne 0) { exit 1 }
           if (-not (Select-String -Path selftest.txt -Pattern "integrity=ok" -Quiet)) { exit 1 }
+      - name: Uygulama içi güncellemeyi gerçek exe ile dene
+        timeout-minutes: 15
+        env:
+          QT_QPA_PLATFORM: offscreen
+          PYTHONUTF8: "1"
+        run: python packaging/test_update_windows.py dist/Oskilo
       - name: Zip
         shell: pwsh
         run: Compress-Archive -Path dist/Oskilo -DestinationPath Oskilo_Windows.zip
@@ -172,7 +185,8 @@ jobs:
           tag_name: ${{ inputs.version || github.ref_name }}
           target_commitish: ${{ github.sha }}
           name: "Oskilo ${{ inputs.version || github.ref_name }}"
-          make_latest: true
+          prerelease: ${{ inputs.prerelease == true }}
+          make_latest: ${{ inputs.prerelease == true && 'false' || 'true' }}
           body: |
             ## Download / İndir
 
