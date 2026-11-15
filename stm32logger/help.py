@@ -216,7 +216,12 @@ GUIDE: dict[str, dict[str, tuple[str, str, str]]] = {
                 ("2", "İlk açılış", "Uygulama durumu söyler: uyarı kalktıysa bilgi verir; kalkmadıysa sizin izninizle etiketi <b>sadece kendi, değişmemiş dosyalarından</b> kaldırır."),
                 ("3", "Başkasına gönderirken", "Zip'i açmadan önce sağ tık → <b>Özellikler</b> → <b>Engellemeyi kaldır</b> → Tamam."))
             + "<h3>macOS</h3><p><b>Sistem Ayarları → Gizlilik ve Güvenlik → Yine de Aç</b> (sadece ilk açılışta). macOS sürümü Apple Silicon (M1 ve sonrası) içindir.</p>"
-            "<h3>Gizlilik</h3><p>Hiçbir veri internete gönderilmez. Tek istisna, <b>Güncellemeleri kontrol et</b>'e bastığınızda GitHub'dan son sürüm numarasının okunmasıdır.</p>"),
+            "<h3>Uygulama içi güncelleme</h3>"
+            + S(("1", "Haber", "Oskilo açılışta günde en fazla bir kez GitHub'a yeni sürüm olup olmadığını sorar; varsa üstte bir bant çıkar. <b>? → Açılışta güncellemeleri denetle</b> ile kapatılabilir."),
+                ("2", "İndirme", "<b>Güncelle</b>'ye basınca yeni sürüm indirilir; parmak izi sürümdeki <code>SHA256SUMS.txt</code> ile, açılan her dosya da derleme listesiyle karşılaştırılır. Tutmazsa hiçbir şey değişmez."),
+                ("3", "Yeniden başlatma", "Oskilo kapanır, dosyalar değiştirilir, yeni sürüm önce kısa bir deneme açılışıyla sınanır ve açılır. Açılamazsa ya da işlem yarıda kalırsa (ör. elektrik kesildi) eski sürüm otomatik geri gelir. <b>Kapatınca güncelle</b> seçilirse aynı işlemler Oskilo kapanınca yapılır. Ayarlar ve kayıtlar etkilenmez."))
+            + "<p>macOS'ta yeni .dmg indirilip açılır; Oskilo'yu Uygulamalar'a sürükleyip değiştirirsiniz. Uygulama klasörü yazılamıyorsa (ör. Program Files) güncelleme yapılmaz; yeni sürümü indirme sayfasından elle kurabilirsiniz. Güncelleme sürerken Oskilo'yu açarsanız güncellendiğini söyler; başka bir Oskilo penceresi açıksa güncelleme ertelenir.</p>"
+            "<h3>Gizlilik</h3><p>Hiçbir veri internete gönderilmez. Tek istisna güncellemedir: GitHub'dan son sürüm bilgisi okunur ve siz onaylarsanız yeni sürüm GitHub'dan indirilir.</p>"),
     },
     # ================================================================== ENGLISH
     "en": {
@@ -396,7 +401,12 @@ GUIDE: dict[str, dict[str, tuple[str, str, str]]] = {
                 ("2", "First launch", "The app tells you the status: if the mark is gone it just informs you; otherwise, with your permission, it removes it <b>only from its own unmodified files</b>."),
                 ("3", "Sharing with others", "Before extracting, right-click the zip → <b>Properties</b> → <b>Unblock</b> → OK."))
             + "<h3>macOS</h3><p><b>System Settings → Privacy &amp; Security → Open Anyway</b> (first launch only). The macOS build is for Apple Silicon (M1 and later).</p>"
-            "<h3>Privacy</h3><p>No data is ever sent to the internet. The only exception: <b>Check for updates</b> reads the latest version number from GitHub.</p>"),
+            "<h3>In-app updates</h3>"
+            + S(("1", "Notice", "At most once a day at startup Oskilo asks GitHub whether a new version exists; if so a bar appears at the top. Turn it off with <b>? → Check for updates at startup</b>."),
+                ("2", "Download", "<b>Update</b> downloads the new version; its fingerprint is checked against <code>SHA256SUMS.txt</code> of the release and every extracted file against the build list. If anything does not match, nothing is changed."),
+                ("3", "Restart", "Oskilo closes, the files are replaced, the new version is checked with a quick test start and then opens. If it cannot start, or the process is interrupted (e.g. power loss), the previous version is restored automatically. <b>Update when I close</b> does the same when Oskilo closes. Settings and recordings are not affected."))
+            + "<p>On macOS the new .dmg is downloaded and opened; drag Oskilo to Applications to replace it. If the app folder is not writable (e.g. Program Files) nothing is changed; you can install the new version manually from the download page. If you open Oskilo while it is updating it says so; if another Oskilo window is open the update is postponed.</p>"
+            "<h3>Privacy</h3><p>No data is ever sent to the internet. The only exception is updating: the latest version info is read from GitHub and, if you confirm, the new version is downloaded from GitHub.</p>"),
     },
 }
 

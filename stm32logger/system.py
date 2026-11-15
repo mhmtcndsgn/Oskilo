@@ -4,12 +4,11 @@
   `manifest.sha256` dosyasına yazılır. Uygulama klasöründe değişen, eksik ya da
   sonradan eklenmiş (tanınmayan) dosyaları bulur.
 * Windows engel kaldırma: sadece parmak izi tutan, kendi dosyalarımızdan kaldırılır.
-* Güncelleme kontrolü (sadece kullanıcı isteyince) ve hata bildirimi bağlantısı.
+* Güncelleme için yardımcılar (asıl iş updater.py'de) ve hata bildirimi bağlantısı.
 """
 from __future__ import annotations
 
 import hashlib
-import json
 import os
 import platform
 import re
@@ -166,7 +165,9 @@ def verify_install(root: str | None = None, manifest: str | None = None) -> dict
         return res
     man_rel = os.path.relpath(manifest, root).replace(os.sep, "/")
     seen = set()
-    for dirpath, _dirs, files in os.walk(root):
+    for dirpath, dirs, files in os.walk(root):
+        if os.path.abspath(dirpath) == os.path.abspath(root):   # güncelleme sırasında geçici klasörler
+            dirs[:] = [d for d in dirs if not d.startswith("_oskilo_")]
         for f in files:
             p = os.path.join(dirpath, f)
             rel = os.path.relpath(p, root).replace(os.sep, "/")
@@ -284,7 +285,7 @@ def keep_awake(on: bool) -> bool:
     return False
 
 
-# ---------------------------------------------------------------- güncelleme kontrolü
+# ---------------------------------------------------------------- güncelleme (updater.py kullanır)
 def _vtuple(v: str) -> tuple[int, ...]:
     return tuple(int(x) for x in re.findall(r"\d+", v)[:3]) or (0,)
 
@@ -299,33 +300,6 @@ class _HttpsOnly(urllib.request.HTTPRedirectHandler):
 
 
 MAX_API_BYTES = 1024 * 1024
-
-
-def check_latest(timeout: float = 6.0) -> dict:
-    """GitHub'daki son sürümü okur (sadece kullanıcı isteyince çağrılır).
-
-    Hiçbir şey indirilmez ya da çalıştırılmaz; sadece sürüm numarası okunur ve
-    kullanıcı isterse tarayıcıda bu reponun Releases sayfası açılır.
-    Döndürür: {"latest": "2.1.0", "url": ..., "newer": bool}
-    """
-    owner_repo = REPO_URL.rstrip("/").split("github.com/")[-1]
-    req = urllib.request.Request(
-        f"https://api.github.com/repos/{owner_repo}/releases/latest",
-        headers={"Accept": "application/vnd.github+json", "User-Agent": f"{APP_NAME}/{__version__}"},
-    )
-    opener = urllib.request.build_opener(_HttpsOnly)
-    with opener.open(req, timeout=timeout) as r:
-        raw = r.read(MAX_API_BYTES + 1)
-    if len(raw) > MAX_API_BYTES:
-        raise ValueError("response too large")
-    data = json.loads(raw.decode("utf-8"))
-    tag = str(data.get("tag_name", "")).strip().lstrip("vV")
-    if not re.fullmatch(r"\d+(?:\.\d+){0,3}", tag):
-        raise ValueError("bad version")
-    url = str(data.get("html_url") or "")
-    if not url.startswith(f"{REPO_URL}/releases/"):     # sadece kendi Releases sayfamız açılır
-        url = f"{REPO_URL}/releases/latest"
-    return {"latest": tag, "url": url, "newer": _vtuple(tag) > _vtuple(__version__)}
 
 
 # ---------------------------------------------------------------- hata bildirimi
