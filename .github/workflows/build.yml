@@ -90,7 +90,11 @@ jobs:
           --add-data "assets;assets"
           --exclude-module tkinter --exclude-module matplotlib --exclude-module scipy
           --exclude-module PIL --exclude-module PyQt5 --exclude-module PyQt6
+          --exclude-module PySide6.QtNetwork --exclude-module PySide6.QtQml --exclude-module PySide6.QtQuick
+          --exclude-module PySide6.QtPdf --exclude-module PySide6.QtTest --exclude-module PySide6.QtVirtualKeyboard
           main.py
+      - name: Kullanılmayan Qt parçalarını çıkar (daha küçük paket, daha hızlı ilk açılış)
+        run: python packaging/prune_qt.py dist/Oskilo
       - name: Dosya parmak izleri (manifest)
         run: python packaging/make_manifest.py dist/Oskilo
       - name: Paketi doğrula (DEMO ile uçtan uca test + bütünlük)
@@ -103,6 +107,12 @@ jobs:
           Get-Content selftest.txt
           if ($p.ExitCode -ne 0) { exit 1 }
           if (-not (Select-String -Path selftest.txt -Pattern "integrity=ok" -Quiet)) { exit 1 }
+      - name: Gerçek Windows ekran eklentisiyle açılış denemesi (çıkarılan Qt parçaları gerekmiyor mu?)
+        shell: pwsh
+        timeout-minutes: 2
+        run: |
+          $p = Start-Process -FilePath "dist/Oskilo/Oskilo.exe" -ArgumentList "--update-probe" -Wait -PassThru
+          if ($p.ExitCode -ne 0) { Write-Host "açılış denemesi kodu: $($p.ExitCode)"; exit 1 }
       - name: Uygulama içi güncellemeyi gerçek exe ile dene
         timeout-minutes: 15
         env:
@@ -138,6 +148,8 @@ jobs:
           --osx-bundle-identifier "com.mhmtcndsgn.datalogger"
           --exclude-module tkinter --exclude-module matplotlib --exclude-module scipy
           --exclude-module PIL --exclude-module PyQt5 --exclude-module PyQt6
+          --exclude-module PySide6.QtNetwork --exclude-module PySide6.QtQml --exclude-module PySide6.QtQuick
+          --exclude-module PySide6.QtPdf --exclude-module PySide6.QtTest --exclude-module PySide6.QtVirtualKeyboard
           main.py
       - name: Paketi doğrula (DEMO ile uçtan uca test)
         timeout-minutes: 3
