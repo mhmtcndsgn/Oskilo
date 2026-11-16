@@ -72,6 +72,10 @@ def prune(dist: Path, dry: bool = False) -> tuple[int, int]:
 
 
 if __name__ == "__main__":
+    try:                                    # Windows konsolu (cp1252) Türkçe karakterde çökmesin
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    except (AttributeError, ValueError):
+        pass
     if sys.platform == "darwin":
         print("macOS: atlandı")
         sys.exit(0)
