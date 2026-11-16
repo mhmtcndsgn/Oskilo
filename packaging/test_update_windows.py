@@ -7,7 +7,8 @@ olan, sürümü 3.0.0) ve onun içinde bir "indirilmiş yeni sürüm" (9.9.9) ha
 sürümün exe'si gerçekten yardımcı olarak çalıştırılır:
 
 A) kapanışta güncelleme + güncellenen uygulamanın kendi testi (--selftest) + artıkların temizlenmesi
-B) yeniden başlatarak güncelleme: yeni sürüm açılır, açılış işareti gelir, artıklar temizlenir
+B) yeniden başlatarak güncelleme (ilerleme penceresi açık): yeni sürüm açılır, açılış işareti gelir,
+   artıklar temizlenir; deneme açılışı yapılmaz (gerçek açılış aynı kontrolü yapar)
 C) başka bir Oskilo penceresi açıkken güncelleme ertelenmeli, hiçbir dosya değişmemeli
    (C2: aynısı SUBST ile eşlenmiş bir sürücü harfi üzerinden)
 D) yarıda kalmış güncelleme: Oskilo açılınca geri alma, indirme klasöründeki exe'ye devredilir;
@@ -84,11 +85,17 @@ def installed(root: Path) -> dict:
             and "__pycache__" not in p.parts}
 
 
-def helper(root: Path, src: Path, pid: int, restart: bool) -> int:
+def helper(root: Path, src: Path, pid: int, restart: bool, ui: bool = False) -> int:
     cmd = [str(src / EXE), "--apply-update", str(root), "--src", str(src), "--wait-pid", str(pid)]
     if restart:
         cmd.append("--restart")
-    return subprocess.run(cmd, timeout=400).returncode
+    env = dict(os.environ)
+    if ui:                                                  # ilerleme penceresi de açılsın
+        env.pop("OSKILO_UPDATE_NO_UI", None)
+    t0 = time.monotonic()
+    rc = subprocess.run(cmd, timeout=400, env=env).returncode
+    print(f"  yardımcı {time.monotonic() - t0:.1f} sn sürdü (kod {rc})")
+    return rc
 
 
 def log_tail(n: int = 10) -> str:
@@ -162,11 +169,14 @@ def scenario_a() -> None:
 
 def scenario_b() -> None:
     root, src = prepare("B")
-    rc = helper(root, src, 0, restart=True)
+    rc = helper(root, src, 0, restart=True, ui=True)
     print(log_tail())
     assert rc == 0, rc
     check_new(root)
     assert running_from(root), "yeni sürüm açık değil"
+    log = u.update_log_path().read_text(encoding="utf-8")
+    assert "deneme açılışı" not in log.split("===== güncelleme")[-1], "yeniden başlatmada deneme açılışı olmamalı"
+    assert "ilerleme penceresi açılamadı" not in log.split("===== güncelleme")[-1], "ilerleme penceresi açılamadı"
     ok = wait_until(lambda: not (root / u.OLD_DIR).exists() and not (root / u.NEW_DIR).exists(), 30)
     left = [d for d in (u.OLD_DIR, u.NEW_DIR) if (root / d).exists()]
     kill_all()
