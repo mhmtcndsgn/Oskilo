@@ -3263,7 +3263,5 @@ class MainWindow(QMainWindow):
         if self._pending_update is not None:
             p = self._pending_update
             self._pending_update = None
-            try:
-                updater.launch_helper(p["helper"], restart=p.get("restart", False))
-            except Exception as e:  # noqa: BLE001  güncelleme başlatılamadı: uygulama yine de kapansın
-                updater._Log(updater.update_log_path())(f"yardımcı başlatılamadı: {e!r}")
+            self.settings.sync()                       # süreç hızlı kapanacak: ayarlar diske yazılsın
+            self._update_on_exit = p                   # yardımcıyı main.py, pencere kapandıktan sonra başlatır
