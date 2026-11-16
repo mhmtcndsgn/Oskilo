@@ -552,7 +552,10 @@ def test_progress_window_smoke(monkeypatch, tmp_path):
     monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
-    from stm32logger.ui.update_progress import ProgressUI
+    try:
+        from stm32logger.ui.update_progress import ProgressUI
+    except ImportError as e:                       # ör. CI'daki Linux'ta ekran kütüphaneleri (libEGL) yok
+        pytest.skip(f"Qt arayüzü yüklenemedi: {e}")
 
     ui = ProgressUI()
     ui.status("upd_p_copy", 0.5, i=3, n=10)
