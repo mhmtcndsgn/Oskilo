@@ -161,7 +161,14 @@ def _stage(splash, i: int, key: str) -> None:
 def main() -> int:
     global _fault_file
     if "--apply-update" in sys.argv or "--rollback-update" in sys.argv:
-        # güncelleme yardımcısı: Qt yüklenmeden, pencere açmadan çalışır
+        # güncelleme yardımcısı (penceresi sadece küçük ilerleme göstergesi)
+        try:   # Qt'nin yerel bir çökmesi bile güncelleme kaydına geçsin
+            from stm32logger import updater
+
+            _fault_file = open(updater.update_log_path(), "a", encoding="utf-8")
+            faulthandler.enable(_fault_file)
+        except Exception:  # noqa: BLE001
+            pass
         try:
             from stm32logger import updater
 
@@ -207,6 +214,13 @@ def main() -> int:
     app.setApplicationName("Oskilo")
     app.setOrganizationName("mhmtcndsgn")
     app.setStyle("Fusion")
+    if "--updated-from" in sys.argv:        # güncelleme penceresi kapansın (önünde soru/hata kalmasın)
+        try:
+            from stm32logger import updater
+
+            updater.mark_splash(sys.argv)
+        except Exception:  # noqa: BLE001
+            pass
 
     if "--reset-settings" in sys.argv:
         from stm32logger.system import app_settings, reset_settings
@@ -251,6 +265,35 @@ def main() -> int:
     rc = app.exec()
     if lock is not None:
         lock.unlock()
+    pending = getattr(win, "_update_on_exit", None)
+    if pending is not None:
+        # Pencere kapandı, ayarlar kaydedildi. Yardımcı ancak şimdi başlatılır: Windows yeni exe'yi
+        # açarken antivirüs taraması birkaç saniye sürebilir; pencere açıkken yapılsaydı "yanıt
+        # vermiyor" görünürdü. Sonra Qt/numpy'nin yavaş kapanışını beklemeden çıkılır (yardımcı bu
+        # sürecin bitmesini bekliyor).
+        try:
+            from stm32logger import updater
+
+            updater.launch_helper(pending["helper"], restart=pending.get("restart", False))
+        except Exception as e:  # noqa: BLE001  yardımcı açılamadı: kullanıcı boş ekranla kalmasın
+            _append_log(_crash_log_path(), f"\n[update] yardımcı başlatılamadı: {e!r}")
+            try:
+                from stm32logger import updater
+
+                updater._Log()(f"yardımcı başlatılamadı: {e!r}")
+                if pending.get("restart"):
+                    updater._spawn(updater._cmd_for(updater.install_dir() / updater.exe_name())
+                                   + ["--update-failed"], updater.install_dir())
+            except Exception:  # noqa: BLE001
+                pass
+        try:
+            if _fault_file is not None:
+                _fault_file.flush()
+            sys.stdout.flush()
+            sys.stderr.flush()
+        except Exception:  # noqa: BLE001
+            pass
+        os._exit(rc)
     return rc
 
 
@@ -295,11 +338,14 @@ def _load_and_build(splash):
     from stm32logger import binary, engine  # noqa: F401  (CRC çözücü, okuma motoru)
     _stage(splash, 3, "sp_s3")
     import numpy  # noqa: F401
+    app.processEvents()                     # Windows açılış ekranını "yanıt vermiyor" sanmasın
     import pyqtgraph  # noqa: F401  (grafik motoru: en uzun süren adım)
     _stage(splash, 4, "sp_s4")
 
     from stm32logger.ui import theme
+    app.processEvents()
     from stm32logger.ui.main_window import ASSETS, MainWindow
+    app.processEvents()
 
     app.setStyleSheet(theme.build_qss(ASSETS))
     icon = ASSETS / "icon.png"
