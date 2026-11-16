@@ -23,6 +23,7 @@ Bu modül sadece standart kütüphaneyi kullanır: yardımcı mod Qt yüklemeden
 """
 from __future__ import annotations
 
+import hashlib
 import http.client
 import json
 import os
@@ -54,6 +55,7 @@ TRASH = "_oskilo_trash"              # silinemeyen artıklar buraya taşınır, 
 # NEW_DIR içindeki işaretler
 READY = "ready.json"                 # doğrulanmış, uygulanmaya hazır sürüm
 STARTED = "started.ok"               # yeni sürüm ana penceresini kurdu
+SPLASH = "splash.ok"                 # yeni sürüm açılmaya başladı (yardımcının penceresi kapanır)
 FAILED = "failed.txt"                # güncelleme başarısız (sonraki açılışta bildirilir)
 APPLIED = "applied.txt"              # kapanışta uygulandı (sonraki açılışta "güncellendi" denir)
 # OLD_DIR içindeki işaretler
@@ -86,6 +88,84 @@ class UpdateError(Exception):
 
 class Cancelled(Exception):
     pass
+
+
+class _NoUI:
+    """Yardımcının ilerleme göstergesi. Varsayılan: hiçbir şey göstermez (testler, Qt yüklenemezse)."""
+
+    def status(self, key: str, frac: float | None = None, **kw) -> None:
+        pass
+
+    def tick(self) -> None:
+        pass
+
+    def close(self) -> None:
+        pass
+
+
+class _SafeUI:
+    """Pencerede bir hata olursa güncelleme etkilenmesin: hata bir kez kaydedilir, pencere bırakılır."""
+
+    def __init__(self, inner):
+        self.inner = inner
+
+    def _call(self, name: str, *a, **kw) -> None:
+        if self.inner is None:
+            return
+        try:
+            getattr(self.inner, name)(*a, **kw)
+        except Exception as e:  # noqa: BLE001
+            _Log()(f"ilerleme penceresi hatası ({name}): {e!r}; pencere olmadan devam")
+            inner, self.inner = self.inner, None
+            try:
+                inner.close()
+            except Exception:  # noqa: BLE001
+                pass
+
+    def status(self, key: str, frac: float | None = None, **kw) -> None:
+        self._call("status", key, frac, **kw)
+
+    def tick(self) -> None:
+        self._call("tick")
+
+    def close(self) -> None:
+        self._call("close")
+        self.inner = None
+
+
+_UI = _NoUI()
+_LAUNCHED = False          # yardımcı yeni sürümü başlattı (bundan sonra beklenmeyen hatada geri alınmaz)
+
+
+def _sha(path) -> str:
+    """Parmak izi; büyük dosyalarda ilerleme penceresi donmasın."""
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for block in iter(lambda: f.read(1024 * 1024), b""):
+            h.update(block)
+            _UI.tick()
+    return h.hexdigest()
+
+
+def _sleep(seconds: float) -> None:
+    """Beklerken ilerleme penceresi donmasın."""
+    end = time.monotonic() + seconds
+    while True:
+        _UI.tick()
+        left = end - time.monotonic()
+        if left <= 0:
+            return
+        time.sleep(min(0.05, left))
+
+
+def _wait_pid_ui(pid: int, timeout: float) -> bool:
+    end = time.monotonic() + timeout
+    while True:
+        if wait_pid(pid, 0.1):
+            return True
+        _UI.tick()
+        if time.monotonic() >= end:
+            return False
 
 
 # ================================================================ sürüm bilgisi
@@ -671,7 +751,7 @@ def _retry(fn, *a, tries: int = 40, delay: float = 0.5):
         except OSError:
             if k == tries - 1:
                 raise
-            time.sleep(delay)
+            _sleep(delay)
 
 
 def _man_rel() -> str:
@@ -723,8 +803,32 @@ def _mkdirs(root: Path, d: Path, j: _Journal) -> None:
         m.mkdir()
 
 
-def apply(src: Path, root: Path, log) -> bool:
-    """Yeni sürümün dosyalarını root'a koyar. Hata olursa günlükten geri alır. True = başarılı."""
+def changed_files(old_known: dict[str, str], new_known: dict[str, str], root: Path,
+                  src: Path | None = None) -> list[str]:
+    """Yeni sürümde eklenen ya da içeriği değişen dosyalar (manifest dışında). Eski ve yeni parmak
+    izi listeleri karşılaştırılır; değişmeyen dosyaların parmak izi yeniden hesaplanmaz. src verilirse
+    "aynı" görünen dosyaların boyutu da karşılaştırılır: kurulumda bozulmuş bir dosya da yenilenir."""
+    root = Path(root)
+    out = []
+    for r, d in new_known.items():
+        if r == _man_rel():
+            continue
+        t = root / r
+        if old_known.get(r) != d or not t.is_file():
+            out.append(r)
+            continue
+        if src is not None:
+            try:
+                if t.stat().st_size != (Path(src) / r).stat().st_size:
+                    out.append(r)
+            except OSError:
+                out.append(r)
+    return sorted(out)
+
+
+def apply(src: Path, root: Path, log, progress=None) -> bool:
+    """Yeni sürümün dosyalarını root'a koyar. Hata olursa günlükten geri alır. True = başarılı.
+    progress(i, n): i. dosya işlendi."""
     src, root = Path(src), Path(root)
     backup = root / OLD_DIR
     j = None
@@ -755,12 +859,23 @@ def apply(src: Path, root: Path, log) -> bool:
             return (os.path.normcase(r) in new_dirs
                     or any(os.path.normcase(p.as_posix()) in norm_new for p in Path(r).parents))
 
-        for rel in [r for r in old_only if conflicts(r)]:
+        early = [r for r in old_only if conflicts(r)]
+        for rel in early:
             to_backup(rel, "removed")
             old_only.remove(rel)
             changed += 1
         # 2) yeni ve değişen dosyalar. Python çekirdeği ve exe en sona (yarıda kalırsa eski exe eski
         #    Python'la açılabilsin ve yarım işi görüp geri alsın), manifest en en sona.
+        todo = set(changed_files(old_known, new_known, root, src)) | {_man_rel()}
+        total = len(todo) + len(old_only)
+        done = 0
+
+        def step() -> None:
+            nonlocal done
+            done += 1
+            if progress is not None:
+                progress(done, total)
+
         exe = exe_name()
         core = re.compile(r"_internal/(base_library\.zip|python3\d*\.dll|libpython3[\d.]*\.(so[\d.]*|dylib))$", re.I)
         late = sorted(r for r in new_known if core.match(r))
@@ -768,7 +883,7 @@ def apply(src: Path, root: Path, log) -> bool:
                  + late + [exe, _man_rel()])
         for rel in order:
             s, t = src / rel, root / rel
-            if t.is_file() and rel != _man_rel() and sha256_file(str(t)) == new_known[rel]:
+            if rel not in todo:
                 continue                                       # değişmemiş: dokunma
             _mkdirs(root, t.parent, j)
             if t.is_dir():                                     # eskiden klasördü (boş kalmış olmalı)
@@ -779,13 +894,15 @@ def apply(src: Path, root: Path, log) -> bool:
             else:
                 j.add(rel, "added")
             _retry(shutil.copy2, s, t)                       # izinler de (macOS/Linux: çalıştırılabilir)
-            if rel != _man_rel() and sha256_file(str(t)) != new_known[rel]:
+            if rel != _man_rel() and _sha(t) != new_known[rel]:
                 raise UpdateError("upd_e_sha")
             changed += 1
+            step()
         # 3) kalan eski dosyalar en son (ör. eski Python DLL'i, eski exe'nin ihtiyacı kalmayınca)
         for rel in old_only:
             to_backup(rel, "removed")
             changed += 1
+            step()
         j.close()
         _write(backup / COMMITTED, str(changed))
         # boş kalan eski klasörler
@@ -886,20 +1003,29 @@ def _probe(root: Path, log) -> bool:
     except OSError as e:
         log(f"deneme açılışı başlatılamadı: {e}")
         return False
-    try:
-        rc = p.wait(PROBE_S)
-    except subprocess.TimeoutExpired:
-        p.kill()
-        log("deneme açılışı zaman aşımı")
-        return False
+    end = time.monotonic() + PROBE_S
+    while (rc := p.poll()) is None:
+        if time.monotonic() >= end:
+            p.kill()
+            log("deneme açılışı zaman aşımı")
+            return False
+        _sleep(0.1)
     log(f"deneme açılışı: kod {rc}")
     return rc == 0
 
 
 def apply_main(argv: list[str]) -> int:
     """`Oskilo.exe --apply-update <kurulum> --src <yeni> --wait-pid <pid> [--restart]`"""
+    global _UI
     log = _Log()
     root = Path(_arg(argv, "--apply-update", "") or ".")
+    if os.environ.get("OSKILO_UPDATE_NO_UI") != "1" and "--no-ui" not in argv:
+        try:
+            from .ui.update_progress import ProgressUI
+
+            _UI = _SafeUI(ProgressUI())
+        except Exception as e:  # noqa: BLE001  pencere açılamazsa güncelleme yine de yapılır
+            log(f"ilerleme penceresi açılamadı: {e!r}")
     try:
         return _apply_main(argv, root, log)
     except BaseException as e:  # noqa: BLE001  beklenmeyen hata: yarım işi geri al, eski sürümü aç
@@ -907,6 +1033,9 @@ def apply_main(argv: list[str]) -> int:
         backup = root / OLD_DIR
         ok = True
         ours = _read(backup / HELPER_PID) == str(os.getpid())      # günlük bu çalışmanın mı?
+        if _LAUNCHED:                    # yeni sürüm çalışıyor: altından geri alma; ilk açılışlar doğrular
+            log("yeni sürüm zaten başlatılmıştı; geri alınmadı")
+            return 1
         if (ours and (backup / JOURNAL).exists() and not (backup / ROLLEDBACK).exists()
                 and not (backup / VERIFIED).exists()):
             try:
@@ -921,6 +1050,8 @@ def apply_main(argv: list[str]) -> int:
             except OSError:
                 pass
         return 1
+    finally:
+        _UI.close()
 
 
 def _apply_main(argv: list[str], root: Path, log) -> int:
@@ -950,6 +1081,7 @@ def _apply_main(argv: list[str], root: Path, log) -> int:
         return 2
 
     def relaunch_old(flag: str | None) -> None:
+        _UI.close()
         if restart:
             try:
                 _spawn(_cmd_for(old_exe) + ([flag] if flag else []), root)
@@ -957,6 +1089,7 @@ def _apply_main(argv: list[str], root: Path, log) -> int:
                 log(f"eski sürüm açılamadı: {e}")
 
     def fail(msg: str, rolled_back: bool = True) -> int:
+        _UI.close()
         _mark_failed(staging, msg)
         if rolled_back:
             relaunch_old("--update-failed")
@@ -967,24 +1100,42 @@ def _apply_main(argv: list[str], root: Path, log) -> int:
                     f"if that does not help, download Oskilo again from GitHub.\n\n{REPO_URL}/releases\n\nLog: {log.path}")
         return 4
 
-    if not wait_pid(pid, 90):
+    _UI.status("upd_p_wait", 0.02)
+    if not _wait_pid_ui(pid, 90):
         log(f"eski süreç ({pid}) kapanmadı; hiçbir şey değişmedi, güncelleme bekliyor")
         return 3
-    time.sleep(0.5)
+    _sleep(0.2)
+    log("eski sürüm kapandı")
+    # sadece değişecek dosyalar yeniden doğrulanır (indirmede hepsi doğrulanmıştı)
     try:
-        verify_tree(src, str(info.get("version", "")))
-    except UpdateError as e:
-        log(f"indirilen dosyalar artık doğrulanamıyor ({e.key}), vazgeçildi")
-        _force_rmtree(staging)
-        relaunch_old(None)
+        new_known = read_manifest(str(manifest_of(src)))
+        old_known = read_manifest(str(manifest_of(root)))
+        todo = changed_files(old_known, new_known, root, src)
+        for i, rel in enumerate(todo):
+            p = src / rel
+            if not p.is_file() or _retry(_sha, p) != new_known[rel]:
+                raise UpdateError("upd_e_sha")
+            if i % 5 == 0:
+                _UI.status("upd_p_check", 0.05 + 0.15 * (i + 1) / max(1, len(todo)))
+        if manifest_version(manifest_of(src)) != str(info.get("version", "")) or exe_name() not in new_known:
+            raise UpdateError("upd_e_pkg")
+    except (UpdateError, OSError) as e:
+        log(f"indirilen dosyalar artık doğrulanamıyor ({getattr(e, 'key', e)}), vazgeçildi")
+        _UI.close()
+        _mark_failed(staging, "indirilen dosyalar doğrulanamadı")
+        relaunch_old("--update-failed")
         return 5
+    log(f"doğrulandı: {len(todo)} dosya değişecek")
     others = other_instances(root, {pid})
     end = time.monotonic() + OTHERS_WAIT_S
+    if others:
+        _UI.status("upd_p_others", 0.2)
     while others and time.monotonic() < end:
-        time.sleep(1)
+        _sleep(1)
         others = other_instances(root, {pid})
     if others:
         log(f"başka Oskilo pencereleri açık ({others}), güncelleme ertelendi")
+        _UI.close()
         if restart:                                  # açılan eski sürüm durumu kendi penceresinde söyler
             relaunch_old("--update-postponed")
         else:
@@ -994,41 +1145,50 @@ def _apply_main(argv: list[str], root: Path, log) -> int:
                     "Close all Oskilo windows and open Oskilo again; the update is ready.")
         return 6
 
-    if not apply(src, root, log):
+    _UI.status("upd_p_check", 0.2)
+    if not apply(src, root, log, progress=lambda i, n: _UI.status("upd_p_copy", 0.2 + 0.6 * i / max(1, n),
+                                                                   i=i, n=n)):
         touched = _read(backup / HELPER_PID) == str(os.getpid())  # apply günlüğe geldi mi?
         complete = not touched or (backup / ROLLEDBACK).exists()
         return fail("dosyalar değiştirilemedi", rolled_back=complete)
-    if not _probe(root, log):
-        ok = rollback(root, log)
-        return fail("yeni sürüm açılamadı (deneme)", rolled_back=ok)
     if not restart:
+        # kimse beklemiyor: yeni sürüm kısa bir deneme açılışıyla sınanır (yeniden başlatmada gerçek
+        # açılış aynı işi görür ve açılamazsa geri alınır)
+        _UI.status("upd_p_probe", 0.85)
+        if not _probe(root, log):
+            ok = rollback(root, log)
+            return fail("yeni sürüm açılamadı (deneme)", rolled_back=ok)
         _write(backup / PROBED, "1")                 # doğrulama ilk gerçek açılışta (mark_started)
         _write(staging / APPLIED, old_ver)
         log("tamam (yeniden başlatılmadı; ilk açılışta doğrulanacak)")
         return 0
+    _UI.status("upd_p_start", 0.85)
+    global _LAUNCHED
     try:
         proc = _spawn(_cmd_for(root / exe_name()) + ["--updated-from", old_ver, "--update-helper",
                                                     str(os.getpid())], root)
+        _LAUNCHED = True
     except OSError as e:
         log(f"yeni sürüm başlatılamadı: {e}")
         ok = rollback(root, log)
         return fail("yeni sürüm başlatılamadı", rolled_back=ok)
     end = time.monotonic() + WATCH_S
     while time.monotonic() < end:
+        if (staging / SPLASH).exists():               # yeni sürümün açılış ekranı göründü: bizim pencere kalksın
+            _UI.close()
         if (staging / STARTED).exists():
             _write(backup / VERIFIED, "started")
             log("yeni sürüm açıldı, tamam")
             return 0
         rc = proc.poll()
         if rc is not None:
-            if rc == 0:                                  # kullanıcı hemen kapattı ya da "zaten açık"ta vazgeçti
-                _write(backup / VERIFIED, "exit0")
-                log("yeni sürüm normal kapandı, tamam")
+            if rc == 0:                                  # ör. "zaten açık"ta vazgeçildi: yüklenip yüklenmediği bilinmiyor
+                log("yeni sürüm ana pencereden önce normal kapandı; ilk açılışlarda doğrulanacak")
                 return 0
             log(f"yeni sürüm açılış işaretinden önce kapandı (kod {rc}), geri alınıyor")
             ok = rollback(root, log)
             return fail("yeni sürüm açılamadı", rolled_back=ok)
-        time.sleep(0.25)
+        _sleep(0.1)
     log("yeni sürüm uzun süredir açılıyor; çalışan uygulamaya dokunulmadı (ilk açılışta doğrulanacak)")
     return 0
 
@@ -1116,6 +1276,20 @@ def preflight(argv: list[str], root: Path | None = None) -> str | None:
     return "broken"
 
 
+def mark_splash(argv: list[str], root: Path | None = None) -> None:
+    """Güncellemeden sonraki açılış başladı (Qt hazır, henüz hiçbir pencere yok): yardımcı kendi
+    penceresini kapatır ki yeni sürümün açılış ekranının ya da sorularının önünde kalmasın."""
+    if "--updated-from" not in argv:
+        return
+    try:
+        staging = Path(root or install_dir()) / NEW_DIR
+        staging.mkdir(exist_ok=True)
+        _write(staging / SPLASH, __version__)
+        _Log()(f"yeni sürüm (v{__version__}): açılıyor")
+    except OSError:
+        pass
+
+
 def mark_started(argv: list[str], root: Path | None = None) -> None:
     """Ana pencere kurulunca (main.py): yeni sürümün açıldığını bildirir."""
     root = Path(root or install_dir())
@@ -1124,6 +1298,7 @@ def mark_started(argv: list[str], root: Path | None = None) -> None:
         if "--updated-from" in argv:
             staging.mkdir(exist_ok=True)
             _write(staging / STARTED, __version__)
+            _Log()(f"yeni sürüm (v{__version__}): ana pencere hazır")
         try:
             helper = int(_read(backup / HELPER_PID, "0") or 0)
         except ValueError:
