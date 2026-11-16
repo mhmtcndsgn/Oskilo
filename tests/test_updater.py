@@ -17,6 +17,8 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from stm32logger import updater as u  # noqa: E402
 
+os.environ["OSKILO_UPDATE_NO_UI"] = "1"           # yardımcı testlerde pencere açmasın
+
 EXE = u.exe_name()
 MAN = "_internal/manifest.sha256"
 DL = u.DOWNLOAD_PREFIX
@@ -368,7 +370,9 @@ def test_apply_main_rejects_tampered_staging(tmp_path, monkeypatch):
     (src / "_internal/a.dll").write_bytes(b"degistirildi")                 # indirildikten sonra değişti
     monkeypatch.setattr(u, "_probe", lambda root, log: True)
     assert u.apply_main(["x", "--apply-update", str(root), "--src", str(src), "--wait-pid", "0"]) == 5
-    assert snapshot(root)[EXE] == OLD[EXE] and not (root / u.NEW_DIR).exists()
+    assert snapshot(root)[EXE] == OLD[EXE] and (root / u.NEW_DIR / u.FAILED).exists()
+    st = u.startup([], root, "3.2.0")                                      # sonraki açılış bildirir, temizler
+    assert st["failed"] and st["pending"] is None and not (root / u.NEW_DIR).exists()
 
 
 def test_apply_main_no_restart(tmp_path, monkeypatch):
@@ -507,9 +511,9 @@ def test_error_before_apply_does_not_replay_previous_journal(tmp_path, monkeypat
     (root / u.NEW_DIR / u.READY).write_text(json.dumps({"version": "3.2.1", "manifest": _sha((src2 / MAN).read_bytes())}))
 
     def boom(*a, **k):
-        raise PermissionError("kilitli")
+        raise RuntimeError("beklenmeyen")
 
-    monkeypatch.setattr(u, "verify_tree", boom)
+    monkeypatch.setattr(u, "other_instances", boom)
     assert u.apply_main(["x", "--apply-update", str(root), "--src", str(src2), "--wait-pid", "0"]) == 1
     assert _installed(root) == after                                       # eski günlük tekrar oynatılmadı
 
@@ -522,3 +526,87 @@ def test_python_core_replaced_after_other_files(tmp_path):
     ops = [r for r, k in u.read_journal(root / u.OLD_DIR) if k in ("replaced", "added", "removed")]
     assert ops.index("_internal/z.dll") < ops.index("_internal/base_library.zip") < ops.index(EXE)
     assert ops.index("_internal/python312.dll") < ops.index(EXE)
+
+
+def test_changed_files_uses_manifests_not_hashes(tmp_path):
+    root = make_tree(tmp_path / "app", "3.2.0", OLD)
+    (root / "_internal/sub/x.pyd").write_bytes(b"bozuk ama listede ayni")  # içeriğe bakılmaz
+    new = u.read_manifest(str(make_tree(tmp_path / "n", "3.2.1", NEW) / MAN))
+    old = u.read_manifest(str(root / MAN))
+    assert u.changed_files(old, new, root) == sorted([EXE, "_internal/a.dll", "_internal/added.dll"])
+    (root / "_internal/sub/x.pyd").unlink()                                # eksikse yeniden kopyalanır
+    assert "_internal/sub/x.pyd" in u.changed_files(old, new, root)
+
+
+def test_apply_reports_progress(tmp_path):
+    root, src = _staged(tmp_path)
+    seen = []
+    assert u.apply(src, root, lambda m: None, progress=lambda i, n: seen.append((i, n)))
+    n = seen[-1][1]
+    assert seen[-1] == (n, n) and [i for i, _ in seen] == list(range(1, n + 1))
+    assert n == 5                       # 3 değişen/eklenen + manifest + 1 kaldırılan
+
+
+def test_progress_window_smoke(monkeypatch, tmp_path):
+    """İlerleme penceresi açılıp kapanabiliyor (ekransız Qt ile)."""
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
+    from stm32logger.ui.update_progress import ProgressUI
+
+    ui = ProgressUI()
+    ui.status("upd_p_copy", 0.5, i=3, n=10)
+    assert "3/10" in ui.win.text and ui.win.frac == 0.5
+    ui.status("upd_p_start", 0.2)
+    assert ui.win.frac == 0.5                                              # geri gitmez
+    ui.tick()
+    ui.close()
+    ui.close()
+
+
+def test_corrupted_installed_file_is_renewed(tmp_path):
+    """Kurulumda bozulmuş (boyutu farklı) bir dosya, listelerde "aynı" görünse de yenilenir."""
+    root, src = _staged(tmp_path)
+    (root / "_internal/sub/x.pyd").write_bytes(b"bozuk")                   # NEW'de de X1, boyut farklı
+    old = u.read_manifest(str(root / MAN))
+    new = u.read_manifest(str(src / MAN))
+    assert "_internal/sub/x.pyd" in u.changed_files(old, new, root, src)
+    assert u.apply(src, root, lambda m: None)
+    assert (root / "_internal/sub/x.pyd").read_bytes() == b"X1"
+
+
+def test_safe_ui_swallows_window_errors(tmp_path):
+    class Boom:
+        closed = False
+
+        def status(self, *a, **k):
+            raise RuntimeError("pencere bozuldu")
+
+        def tick(self):
+            raise RuntimeError("pencere bozuldu")
+
+        def close(self):
+            Boom.closed = True
+
+    ui = u._SafeUI(Boom())
+    ui.status("upd_p_wait", 0.1)                                           # hata yükselmez
+    assert ui.inner is None and Boom.closed
+    ui.tick()
+    ui.close()
+
+
+def test_restart_exit0_before_window_is_not_verified(tmp_path, monkeypatch):
+    """Yeni sürüm ana penceresini kurmadan 0 koduyla kapanırsa (ör. "zaten açık"ta vazgeçildi)
+    güncelleme doğrulanmış sayılmaz; ilk açılışlar doğrular ya da geri alır."""
+    root, src = _staged(tmp_path)
+
+    class P:
+        returncode = 0
+
+        def poll(self):
+            return 0
+
+    monkeypatch.setattr(u, "_spawn", lambda cmd, cwd: P())
+    rc = u.apply_main(["x", "--apply-update", str(root), "--src", str(src), "--wait-pid", "0", "--restart"])
+    assert rc == 0
+    assert (root / u.OLD_DIR / u.COMMITTED).exists() and not (root / u.OLD_DIR / u.VERIFIED).exists()
