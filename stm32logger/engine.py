@@ -542,6 +542,10 @@ def open_port(port: str, baud: int, mode: str, binary: bool = False):
     """Gerçek ya da demo portu açar. Windows'ta sürücü tamponunu büyütür."""
     if port == DEMO_PORT:
         return DemoSerial(mode=mode, baud=baud, binary_frames=binary)
+    from . import netport
+
+    if netport.is_net(port):                               # tcp://ip:port ya da udp://:port
+        return netport.open_net(port)
     import serial  # geç yükleme: açılışı hızlandırır
 
     kw = {} if os.name == "nt" else {"exclusive": True}   # Windows'ta port zaten tek kullanıcılı

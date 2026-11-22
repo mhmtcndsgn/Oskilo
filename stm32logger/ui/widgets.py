@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from PySide6.QtCore import QEvent, QObject, Qt, Signal
-from PySide6.QtWidgets import (QButtonGroup, QFrame, QHBoxLayout, QLabel, QPushButton,
+from PySide6.QtWidgets import (QButtonGroup, QFrame, QHBoxLayout, QLabel, QPushButton, QSizePolicy,
                                QVBoxLayout, QWidget)
 
 
@@ -147,9 +147,9 @@ class Tile(QFrame):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setObjectName("Tile")
-        lay = QVBoxLayout(self)
-        lay.setContentsMargins(14, 10, 14, 10)
-        lay.setSpacing(1)
+        lay = QVBoxLayout(self)                 # ince kutu: başlık üstte, değer ve açıklama aynı satırda
+        lay.setContentsMargins(12, 6, 12, 7)
+        lay.setSpacing(0)
         self.label = QLabel()
         self.label.setObjectName("TileLabel")
         self.value = QLabel("—")
@@ -158,7 +158,15 @@ class Tile(QFrame):
         self.sub.setObjectName("TileSub")
         for w in (self.label, self.value, self.sub):
             w.setTextFormat(Qt.PlainText)   # dosya/port adı HTML olarak yorumlanmasın
-            lay.addWidget(w)
+        self.sub.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)   # dar ekranda kısalır
+        self.value.setSizePolicy(QSizePolicy.Minimum, QSizePolicy.Preferred)  # değer hiç kesilmesin
+        row = QHBoxLayout()
+        row.setContentsMargins(0, 0, 0, 0)
+        row.setSpacing(8)
+        row.addWidget(self.value, 0, Qt.AlignBottom)
+        row.addWidget(self.sub, 1, Qt.AlignBottom)
+        lay.addWidget(self.label)
+        lay.addLayout(row)
         self._last = None
 
     def set(self, value: str, sub: str = " ", color: str | None = None) -> None:
@@ -168,7 +176,9 @@ class Tile(QFrame):
         self._last = key
         self.value.setText(value)
         self.sub.setText(sub or " ")
+        self.sub.setToolTip(sub.strip() if sub else "")
         self.value.setStyleSheet(f"color: {color};" if color else "")
+        self.value.updateGeometry()
 
 
 class PanelHeader(QWidget):

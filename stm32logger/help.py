@@ -65,7 +65,20 @@ GUIDE: dict[str, dict[str, tuple[str, str, str]]] = {
                 (11, "Kanallar ve birimler", "Ham değeri gerçek birime çevirir (ör. ADC → Volt). Ayrıntı: <i>Analiz</i> konusu."),
                 (12, "Eşik alarmları", "Bir kanal eşiği aşınca uyarır, not düşer; isterseniz ses çalar ya da karta komut gönderir. Ayrıntı: <i>Analiz</i> konusu."))
             + TIP("⚠️", "<b>Port görünmüyorsa:</b> Arduino klonları ve ESP kartları için <b>CH340</b> ya da <b>CP2102</b> sürücüsünü kurun. "
-                         "Kablonun sadece şarj kablosu olmadığından emin olun. Port başka bir programda (Arduino IDE seri monitörü, STM32CubeIDE) açıksa önce oradan kapatın.")),
+                         "Kablonun sadece şarj kablosu olmadığından emin olun. Port başka bir programda (Arduino IDE seri monitörü, STM32CubeIDE) açıksa önce oradan kapatın.")
+            + "<h3>Ağ üzerinden (Ethernet / Wi-Fi)</h3>"
+            "<p>Kart Oskilo ağ protokolünü destekliyorsa (<code>firmware_ornek</code> klasöründeki <b>STM32 + W5500</b> ve <b>ESP32 Wi-Fi</b> örnekleri) "
+            "<b>IP yazmanıza gerek yoktur</b>: Oskilo ağdaki kartları kendiliğinden bulur ve port listesinde <b>🌐 kartın adı</b> olarak gösterir. "
+            "Gönderilen satırlar ya da ikili çerçeveler seri porttakiyle <b>aynıdır</b>; kayıp tespiti, alarmlar ve kayıt aynen çalışır.</p>"
+            + S((1, "Kabloyu takın", "Kartı Ethernet kablosuyla laptopa ya da modeme takın (ESP32: kartın açtığı <b>Oskilo-XXXX</b> Wi-Fi ağına bağlanın). Windows'ta hiçbir ayar gerekmez; doğrudan kabloda adres 10–60 sn içinde alınır."),
+                (2, "Kartı seçin", "Birkaç saniye içinde port listesinde <b>🌐 Oskilo XXXX</b> görünür. Seçince kartın veri biçimi ve çalışma modu kendiliğinden seçili gelir."),
+                (3, "TCP ya da UDP", "<b>TCP</b> (önerilen): veri kaybolmaz. <b>UDP</b>: çok yüksek hızlar için; kayıplar sıra numarasından sayılır. Bağlantı koparsa Oskilo kartı <b>kimliğiyle</b> yeniden bulur, IP değişse bile."),
+                (4, "Ad verin", "<b>✎ Adını değiştir</b> ile karta bir ad verin (ör. Balans makinesi); ad kartın hafızasına yazılır. Birden fazla kart varken <b>💡 Kartı göster</b> kartın LED'ini yakıp söndürür."))
+            + TIP("🔎", "<b>Kart listede yok mu?</b> Port listesinde <b>Ağ — elle adres gir</b>'i seçip <b>Kart bulunamıyor mu?</b>'ya tıklayın: olası sebepler ve "
+                         "<b>Oskilo'ya izin ver</b> (Windows Güvenlik Duvarı) düğmesi oradadır. Okul / şirket Wi-Fi ağları cihazları birbirinden yalıtır; doğrudan kablo ya da kendi modeminizi kullanın.")
+            + "<p><b>Elle adres:</b> protokolü bilmeyen kartlar için <b>Ağ — elle adres gir</b> → TCP'de kartın IP'si ve portu; UDP'de Oskilo seçtiğiniz portu dinler ve kart veriyi bu bilgisayarın IP adresine gönderir.</p>"
+            + TIP("💡", "<b>Kart olmadan deneme:</b> Oskilo Kaynak klasöründeki <code>araclar\\ag_test_karti.bat</code> bilgisayarda sahte bir Oskilo kartı çalıştırır; "
+                         "Oskilo onu port listesinde gösterir. Kuralların tamamı: <code>docs/ag_protokolu.md</code>.")),
         "modes": ("Canlı izleme ve deney aktarımı", "Kartınızın veriyi nasıl gönderdiğine göre mod seçin.",
             TABLE(["", "Canlı izleme", "Deney aktarımı"],
                   [["<b>Ne zaman?</b>", "Kart ölçtükçe sürekli gönderiyorsa", "Kart deneyi belleğe (ör. DMA) kaydedip <b>sonunda topluca</b> gönderiyorsa"],
@@ -145,11 +158,14 @@ GUIDE: dict[str, dict[str, tuple[str, str, str]]] = {
                 (2, "Pencere", "Canlı izlemede son kaç saniyenin gösterileceği."),
                 (3, "Sığdır", "Yakınlaştırdıktan sonra tüm veriyi tekrar gösterir."),
                 (4, "PNG kaydet", "Grafiği rapor için resim olarak kaydeder."),
-                (5, "Gösterge", "Bir kanalın adına tıklayınca o kanal gizlenir / gösterilir."),
+                (5, "Kanal düğmeleri", "Grafiğin üstündeki <b>● Kanal</b> düğmesine tıklayınca o kanal gizlenir / gösterilir; eksenler görünen kanallara göre ayarlanır. PNG'de kanal adları resmin içine yazılır."),
                 (6, "HEX / Duraklat / Temizle", "<b>HEX</b> gelen baytları onaltılık gösterir (baud yanlışsa ya da kart ikili veri gönderiyorsa işe yarar). Temizle: <b>Ctrl+L</b>. Kayıt etkilenmez."),
                 (7, "Hızlı komut butonları", "Sık gönderdiğiniz komutlar tek tıkla gider. <b>＋</b> ile ekleyin, sağ tıkla düzenleyin / silin. Tekrar aralığı verirseniz buton basılı kaldıkça komut her X saniyede bir gönderilir."),
                 (8, "Komut gönder", "Karta yazı gönderir (ör. <code>GONDER</code>). <b>HEX</b> işaretliyse <code>01 A0 FF</code> gibi bayt gönderir. <b>↑ / ↓</b> önceki komutları getirir."),
-                (9, "Grafiği gizle / göster", "<b>▾ Grafik</b>'e tıklayınca grafik küçülür, yeri terminale kalır; sadece terminalden okumak için. Gizliyken grafik hiç çizilmez, bilgisayar rahatlar; kayıt aynen sürer."))
+                (9, "Grafiği gizle / göster", "<b>▾ Grafik</b>'e tıklayınca grafik küçülür, yeri terminale kalır; sadece terminalden okumak için. Gizliyken grafik hiç çizilmez, bilgisayar rahatlar; kayıt aynen sürer."),
+                (10, "Grafiği büyüt", "<b>⛶</b> (ya da grafiğe çift tıklama): <b>odak modu</b>, sol panel, kutular ve terminal gizlenir; üstte tek satır özet kalır. <b>F11</b>: tam ekran. <b>Esc</b>: geri dön."),
+                (11, "Ayrı pencere", "<b>⧉</b> grafiği ayrı bir pencereye taşır (ikinci monitör / projeksiyon). Pencereyi kapatınca grafik yerine döner."),
+                (12, "Yer açmak", "Sol üstteki <b>◧</b> (ya da <b>Ctrl+B</b>) sol paneli ince bir şeride indirir; bağlan düğmesi şeritte kalır. Terminalin sağındaki <b>▾</b> alt paneli sekme satırına indirir."))
             + TIP("🖱️", "Tekerlek: yakınlaştır · Sol tık sürükle: kaydır · Sağ tık: eksen seçenekleri. Grafik verinin dışına kaçmaz: "
                         "en fazla tüm veri sığana kadar uzaklaşır, sürükleyince verinin biraz ötesinde durur.")),
         "analysis": ("Analiz: FFT, imleç, istatistik, notlar", "Kaydı uygulamadan çıkmadan inceleyin.",
@@ -250,7 +266,20 @@ GUIDE: dict[str, dict[str, tuple[str, str, str]]] = {
                 (11, "Channels and units", "Converts raw values to real units (e.g. ADC → Volt). Details: <i>Analysis</i> topic."),
                 (12, "Threshold alarms", "Warns and adds a note when a channel crosses a threshold; optionally plays a sound or sends a command to the board. Details: <i>Analysis</i> topic."))
             + TIP("⚠️", "<b>Port not listed?</b> Install the <b>CH340</b> or <b>CP2102</b> driver for Arduino clones and ESP boards. "
-                         "Make sure the cable is not charge-only, and close the port in other programs (Arduino IDE serial monitor, STM32CubeIDE).")),
+                         "Make sure the cable is not charge-only, and close the port in other programs (Arduino IDE serial monitor, STM32CubeIDE).")
+            + "<h3>Over the network (Ethernet / Wi-Fi)</h3>"
+            "<p>If the board supports the Oskilo network protocol (the <b>STM32 + W5500</b> and <b>ESP32 Wi-Fi</b> examples in <code>firmware_ornek</code>), "
+            "<b>you don't type any IP address</b>: Oskilo finds boards on the network by itself and lists them as <b>🌐 board name</b> in the port list. "
+            "The lines or binary frames are <b>the same</b> as over a serial port; loss detection, alarms and recording work as usual.</p>"
+            + S((1, "Plug in", "Connect the board to the laptop or the router with an Ethernet cable (ESP32: join the <b>Oskilo-XXXX</b> Wi-Fi network it opens). No Windows settings are needed; on a direct cable the address is assigned within 10–60 s."),
+                (2, "Pick the board", "Within a few seconds <b>🌐 Oskilo XXXX</b> appears in the port list. Selecting it also selects the board's data format and mode."),
+                (3, "TCP or UDP", "<b>TCP</b> (recommended): no data is lost. <b>UDP</b>: for very high rates; losses are counted from the sequence number. If the connection drops, Oskilo finds the board again <b>by its ID</b>, even if its IP changed."),
+                (4, "Name it", "Use <b>✎ Rename</b> to give the board a name (e.g. Balancing machine); the name is stored on the board. With several boards, <b>💡 Identify</b> blinks the board's LED."))
+            + TIP("🔎", "<b>Board not listed?</b> Choose <b>Network — enter address</b> in the port list and click <b>Can't find the board?</b>: it lists likely causes and has the "
+                         "<b>Allow Oskilo</b> (Windows Firewall) button. School / office Wi-Fi isolates devices; use a direct cable or your own router.")
+            + "<p><b>Manual address:</b> for boards without the protocol, choose <b>Network — enter address</b> → TCP: the board's IP and port; UDP: Oskilo listens on the chosen port and the board sends to this computer's IP address.</p>"
+            + TIP("💡", "<b>Try without a board:</b> <code>araclar\\ag_test_karti.bat</code> in the source folder runs a fake Oskilo board on this computer; "
+                         "Oskilo lists it in the port list. Full rules: <code>docs/ag_protokolu.md</code>.")),
         "modes": ("Live vs. experiment mode", "Pick the mode that matches how your board sends data.",
             TABLE(["", "Live monitor", "Experiment dump"],
                   [["<b>When?</b>", "The board sends data continuously while measuring", "The board stores the experiment (e.g. DMA) and sends it <b>all at the end</b>"],
@@ -330,11 +359,14 @@ GUIDE: dict[str, dict[str, tuple[str, str, str]]] = {
                 (2, "Window", "How many recent seconds to show in live mode."),
                 (3, "Fit", "Shows all data again after zooming."),
                 (4, "Save PNG", "Saves the chart as an image for reports."),
-                (5, "Legend", "Click a channel name to hide or show it."),
+                (5, "Channel buttons", "Click a <b>● Channel</b> button above the chart to hide or show that channel; the axes follow the visible channels. Saved PNGs include the channel names."),
                 (6, "HEX / Pause / Clear", "<b>HEX</b> shows received bytes in hexadecimal (useful with a wrong baud rate or binary data). Clear: <b>Ctrl+L</b>. Recording is not affected."),
                 (7, "Quick command buttons", "Commands you send often, one click away. Add with <b>＋</b>, right-click to edit / delete. With a repeat interval the button stays pressed and sends the command every X seconds."),
                 (8, "Send command", "Sends text to the board (e.g. <code>SEND</code>). With <b>HEX</b> ticked it sends bytes like <code>01 A0 FF</code>. <b>↑ / ↓</b> recalls previous commands."),
-                (9, "Hide / show chart", "Click <b>▾ Chart</b> to fold the chart away and give its space to the terminal, for reading the terminal only. While hidden the chart is not drawn at all, which saves CPU; recording continues."))
+                (9, "Hide / show chart", "Click <b>▾ Chart</b> to fold the chart away and give its space to the terminal, for reading the terminal only. While hidden the chart is not drawn at all, which saves CPU; recording continues."),
+                (10, "Enlarge the chart", "<b>⛶</b> (or double-click the chart): <b>focus mode</b> hides the left panel, the tiles and the terminal and keeps a one-line summary on top. <b>F11</b>: full screen. <b>Esc</b>: back."),
+                (11, "Separate window", "<b>⧉</b> moves the chart to its own window (second monitor / projector). Close that window to put the chart back."),
+                (12, "Make room", "<b>◧</b> at the top left (or <b>Ctrl+B</b>) folds the left panel into a thin strip that keeps the connect button. The <b>▾</b> right of the terminal tabs folds the bottom panel to its tab row."))
             + TIP("🖱️", "Wheel: zoom · Left-drag: pan · Right-click: axis options. The view never runs off the data: "
                         "you can zoom out until all data fits, and panning stops just past the data.")),
         "analysis": ("Analysis: FFT, cursors, statistics, notes", "Inspect the recording without leaving the app.",

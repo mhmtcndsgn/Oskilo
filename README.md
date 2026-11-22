@@ -45,6 +45,7 @@
 - **🔔 Threshold alarms:** when a channel crosses its threshold you get a warning banner, a threshold line on the chart and an automatic note on that row; optionally a sound and a command to the board (e.g. `STOP`). Hysteresis keeps a jittering signal from flooding alarms.
 - **⏺️ Triggered recording:** for unattended tests, save only the events. Mark an alarm as *Start rec.*; when it fires, the seconds before the trigger (0–60 s) and the set length after it are saved to their own file (`name_trigger_…`), then the next event is awaited. The continuous stream stays on screen but is not written to disk.
 - **🔄 In-app updates (Windows):** when a new version is out, a bar appears at the top. **Update** downloads it, checks it against `SHA256SUMS.txt` and the build's file list, then restarts Oskilo on the new version. If the new version fails to start, the previous one is restored automatically. On macOS the new `.dmg` is downloaded and opened.
+- **🌐 Network (Ethernet / Wi-Fi), no IP typing:** boards that speak the Oskilo network protocol are found automatically and listed as `🌐 board name` next to the COM ports: plug in the cable, pick the board, connect. Oskilo remembers the board by its ID (the IP may change), reconnects on its own, can rename the board (stored on the board) and blink its LED. TCP by default, UDP for very high rates. Ready-made firmware: [STM32 + W5500](firmware_ornek/stm32_w5500/) and [ESP32 Wi-Fi](firmware_ornek/esp32_wifi/esp32_wifi.ino); protocol: [`docs/ag_protokolu.md`](docs/ag_protokolu.md). Other boards can still be reached by entering an IP (TCP) or listening on a port (UDP). `araclar/ag_test_karti.bat` runs a fake board.
 - **Board detection:** STM32 (ST-Link), Arduino, ESP32, CH340, CP2102, FTDI and Raspberry Pi Pico ports are marked with ★.
 - **Send commands** to the board (e.g. `SEND` to request a new dump), as text or **HEX bytes**; **↑ / ↓** recalls previous commands. A **HEX view** shows the raw bytes.
 - **Quick command buttons:** turn commands you send often into buttons, optionally repeated at an interval (e.g. `READ` every 2 s).
@@ -118,6 +119,7 @@ END,4000
 Ready-made examples:
 - **STM32 (HAL):** [`firmware_ornek/veri_gonder.c`](firmware_ornek/veri_gonder.c): timer-triggered ADC + DMA + UART dump
 - **Arduino / ESP32 / ESP8266:** [`firmware_ornek/arduino_ornek/arduino_ornek.ino`](firmware_ornek/arduino_ornek/arduino_ornek.ino): live mode, or a dump on the `GONDER` command
+- **Network, no IP typing:** [`firmware_ornek/stm32_w5500/`](firmware_ornek/stm32_w5500/) (STM32 + W5500 Ethernet, library + CubeMX guide) and [`firmware_ornek/esp32_wifi/esp32_wifi.ino`](firmware_ornek/esp32_wifi/esp32_wifi.ino) (ESP32 Wi-Fi)
 - **Binary (CRC) format, any board:** [`firmware_ornek/oskilo_ikili.h`](firmware_ornek/oskilo_ikili.h) (single file) and the Arduino sample [`firmware_ornek/arduino_ikili/arduino_ikili.ino`](firmware_ornek/arduino_ikili/arduino_ikili.ino). In the app choose *Connection → Data format → Binary (CRC)*.
 
   ```
