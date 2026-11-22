@@ -9,6 +9,7 @@ import math
 import os
 import queue
 import shutil
+import socket
 import sys
 import threading
 import weakref
@@ -24,21 +25,24 @@ from PySide6.QtGui import (QAction, QActionGroup, QColor, QDesktopServices, QFon
 from PySide6.QtWidgets import (QApplication, QCheckBox, QComboBox, QDoubleSpinBox, QFileDialog, QFrame,
                                QHBoxLayout, QHeaderView, QInputDialog, QLabel, QLineEdit, QListWidget,
                                QMainWindow, QMenu, QMessageBox, QPlainTextEdit, QProgressBar, QProgressDialog,
-                               QPushButton, QScrollArea, QSpinBox, QSplitter, QTableWidget, QTableWidgetItem, QTabWidget,
-                               QToolButton, QVBoxLayout, QWidget)
+                               QPushButton, QScrollArea, QSizePolicy, QSpinBox, QSplitter, QStackedWidget, QTableWidget,
+                               QTableWidgetItem, QTabWidget, QToolButton, QVBoxLayout, QWidget)
 
 from .. import APP_NAME, __version__
 from .. import analysis, system, updater
 from ..engine import DEMO_PORT, Engine, list_ports, open_port
+from .. import netdiscovery, netport
 from ..exporter import FORMATS, default_filename, export_session
 from ..i18n import T
 from ..session import Session, clean_note, extract as extract_session
 from . import theme as th
 from ..analysis import parse_hex, sanitize_cmds
+from .net_diag import NetDiagDialog
 from .tools import AlarmsDialog, QuickCmdDialog, UnitsDialog
 from .widgets import Card, PanelHeader, Segmented, Tile, guard_wheel, hint_label, hrow
 
 ASSETS = Path(__file__).resolve().parent.parent.parent / "assets"
+NET_PORT = "__NET__"   # port listesindeki "Ağ (TCP/UDP)" öğesi
 BAUDS = ["9600", "19200", "38400", "57600", "115200", "230400", "460800", "921600", "1000000", "2000000"]
 WINDOWS = [10, 30, 60, 300, 0]  # sn, 0 = tümü
 TERM_MAX_PER_TICK = 400
@@ -51,6 +55,13 @@ AUTOSAVE_MIN = [0, 1, 5, 10, 30]   # canlı izlemede otomatik kaydetme aralığ�
 def _tip(text: str) -> str:
     """Araç ipucu: karttan/USB'den gelen metin HTML olarak yorumlanmasın."""
     return "<p>" + html.escape(str(text)) + "</p>"
+
+
+def _upper(text: str, lang: str) -> str:
+    """Büyük harf: Türkçede i → İ, ı → I (Python'un upper()'ı "EKSIK VERI" yazar)."""
+    if lang == "tr":
+        text = text.replace("i", "İ").replace("ı", "I")
+    return text.upper()
 
 
 def _swatch(color: str, size: int = 16) -> QIcon:
@@ -133,6 +144,56 @@ def status_icon(kind: str, size: int = 44) -> QPixmap:
     return pm
 
 
+class DetachedPlot(QWidget):
+    """Ayrı pencerede grafik. Kapatılınca grafik ana pencereye geri döner."""
+
+    def __init__(self, main: "MainWindow"):
+        super().__init__(None, Qt.Window)
+        self.main = main
+        self._quiet = False
+        self.setWindowTitle(main.t("detach_title"))
+        icon = ASSETS / "icon.png"
+        if icon.exists():
+            self.setWindowIcon(QIcon(str(icon)))
+        self.setObjectName("SidebarInner")
+        self.lay = QVBoxLayout(self)
+        self.lay.setContentsMargins(10, 10, 10, 10)
+        for keys, fn in (("F11", self.toggle_full), ("Esc", self._esc)):
+            act = QAction(self, triggered=fn)
+            act.setShortcut(QKeySequence(keys))
+            act.setShortcutContext(Qt.WindowShortcut)
+            self.addAction(act)
+
+    def attach(self, panel: QWidget) -> None:
+        self.panel = panel
+        self.lay.addWidget(panel)
+        panel.show()
+
+    def release(self) -> None:
+        self.lay.removeWidget(self.panel)
+
+    def toggle_full(self) -> None:
+        if self.isFullScreen():
+            self.showNormal()
+        else:
+            self.showFullScreen()
+        self.main.btn_focus.setChecked(self.isFullScreen())
+
+    def _esc(self) -> None:
+        if self.isFullScreen():
+            self.toggle_full()
+
+    def close_quiet(self) -> None:
+        self._quiet = True
+        self.close()
+
+    def closeEvent(self, ev) -> None:  # noqa: N802
+        if not self._quiet:                       # kullanıcı pencereyi kapattı: grafik geri dönsün
+            QTimer.singleShot(0, lambda: self.main._set_detached(False))
+        super().closeEvent(ev)
+
+
+
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
@@ -163,6 +224,7 @@ class MainWindow(QMainWindow):
         self._rate = collections.deque()
         self._conn_t0 = 0.0
         self._conn_info = ("", 0, "live")
+        self._conn_net = False
         self._curves: dict[str, pg.PlotDataItem] = {}
         self._gap_items: list = []
         self._plot_t = 0.0
@@ -232,6 +294,16 @@ class MainWindow(QMainWindow):
         self.resize(1360, 860)
         self.setMinimumSize(960, 620)
 
+        self.disc = netdiscovery.shared()
+        self._known_devs: set[str] = set()
+        self._port_user_picked = False
+        self._dev_applied = None
+        self._side_collapsed = False
+        self._bottom_collapsed = False
+        self._focus = False
+        self._focus_full = False
+        self._detached = False
+        self._detach_win = None
         self._build()
         guard_wheel(self.port_cb, self.baud_cb, self.fs_spin, self.seq_cb, self.idle_spin, self.trig_pre, self.trig_dur,
                     self.x_cb, self.win_cb, self.eol_cb, self.lang_cb)
@@ -246,8 +318,9 @@ class MainWindow(QMainWindow):
         self.ui_timer.start()
         self.plot_timer = QTimer(self, interval=200, timeout=self._update_plot)
         self.plot_timer.start()
-        self.port_timer = QTimer(self, interval=2000, timeout=lambda: self._refresh_ports(silent=True))
+        self.port_timer = QTimer(self, interval=1000, timeout=lambda: self._refresh_ports(silent=True))
         self.port_timer.start()
+        QTimer.singleShot(300, self.disc.start)          # ağdaki kartları aramaya başla
         self._last_autosave = self._last_disk = self._last_retry = time.monotonic()
         self._disk_low = False
         self.long_timer = QTimer(self, interval=15000, timeout=self._periodic)
@@ -266,11 +339,19 @@ class MainWindow(QMainWindow):
         for keys, fn in ((("Ctrl+S",), self._save_now), (("Ctrl+Shift+S",), self._save_as),
                          (("Ctrl+O",), self._open_saved_file),
                          (("F5",), self._toggle_connect), (("Ctrl+L",), self.term.clear),
-                         (("Ctrl+M",), self._add_note)):
+                         (("Ctrl+M",), self._add_note),
+                         (("F11",), lambda: self._set_focus(not self._focus_full, full=True)),
+                         (("Ctrl+B",), lambda: self._set_sidebar_collapsed(not self._side_collapsed))):
             act = QAction(self, triggered=fn)
             act.setShortcuts([QKeySequence(k) for k in keys])
             act.setShortcutContext(Qt.WindowShortcut)
             self.addAction(act)
+        # Esc sadece odak modundayken çalışır (başka yerde Esc'yi çalmasın)
+        self.act_esc = QAction(self, triggered=lambda: self._set_focus(False))
+        self.act_esc.setShortcut(QKeySequence("Esc"))
+        self.act_esc.setShortcutContext(Qt.WindowShortcut)
+        self.act_esc.setEnabled(False)
+        self.addAction(self.act_esc)
         # ilk açılış soruları ana pencere ekrana gelince sorulsun (açılış ekranının arkasında kalmasın)
         self._first_run_due = not any(f in sys.argv for f in ("--selftest", "--no-first-run"))
 
@@ -284,19 +365,50 @@ class MainWindow(QMainWindow):
         v.addWidget(self._build_header())
 
         body = QHBoxLayout()
-        body.setContentsMargins(16, 14, 16, 12)
-        body.setSpacing(14)
+        body.setContentsMargins(16, 16, 16, 12)
+        body.setSpacing(16)
         v.addLayout(body, 1)
-        body.addWidget(self._build_sidebar())
+        body.addWidget(self._build_rail())
+        self.sidebar = self._build_sidebar()
+        body.addWidget(self.sidebar)
         body.addWidget(self._build_main(), 1)
         self._build_statusbar()
 
+    def _build_rail(self) -> QWidget:
+        """Sol panel daraltılınca kalan ince şerit: paneli aç, bağlan / bağlantıyı kes."""
+        rail = self.side_rail = QFrame()
+        rail.setObjectName("Rail")
+        rail.setFixedWidth(50)
+        rv = QVBoxLayout(rail)
+        rv.setContentsMargins(7, 8, 7, 8)
+        rv.setSpacing(8)
+        self.btn_rail_open = QPushButton("»")
+        self.btn_rail_open.setObjectName("RailBtn")
+        self.btn_rail_open.setCursor(Qt.PointingHandCursor)
+        self.btn_rail_open.clicked.connect(lambda: self._set_sidebar_collapsed(False))
+        self.btn_rail_conn = QPushButton("▶")
+        self.btn_rail_conn.setObjectName("RailBtn")
+        self.btn_rail_conn.setProperty("state", "off")
+        self.btn_rail_conn.setCursor(Qt.PointingHandCursor)
+        self.btn_rail_conn.clicked.connect(self._toggle_connect)
+        rv.addWidget(self.btn_rail_open)
+        rv.addWidget(self.btn_rail_conn)
+        rv.addStretch(1)
+        rail.hide()
+        return rail
+
     def _build_header(self) -> QWidget:
-        hdr = QFrame()
+        hdr = self.header_frame = QFrame()
         hdr.setObjectName("Header")
         lay = QHBoxLayout(hdr)
         lay.setContentsMargins(20, 10, 20, 10)
         lay.setSpacing(10)
+        self.btn_side = QToolButton()
+        self.btn_side.setObjectName("HelpBtn")
+        self.btn_side.setText("◧")
+        self.btn_side.setCursor(Qt.PointingHandCursor)
+        self.btn_side.clicked.connect(lambda: self._set_sidebar_collapsed(not self._side_collapsed))
+        lay.addWidget(self.btn_side)
         logo = QLabel()
         pm = QPixmap(str(ASSETS / "icon.png"))
         if not pm.isNull():
@@ -320,7 +432,6 @@ class MainWindow(QMainWindow):
         self.lang_cb.currentIndexChanged.connect(lambda _: self._set_lang(self.lang_cb.currentData()))
         ver = QLabel(f"v{__version__}")
         ver.setObjectName("Version")
-        from PySide6.QtWidgets import QMenu, QToolButton
 
         self.btn_help = QToolButton()
         self.btn_help.setObjectName("HelpBtn")
@@ -407,6 +518,68 @@ class MainWindow(QMainWindow):
         self.btn_refresh.setObjectName("Icon")
         self.btn_refresh.clicked.connect(lambda: self._refresh_ports(manual=True))
         c.add(hrow(self.port_cb, self.btn_refresh))
+        self.port_cb.currentIndexChanged.connect(lambda _: self._on_port_changed())
+        self.port_cb.activated.connect(lambda _: setattr(self, "_port_user_picked", True))
+        # ağ bağlantısı (TCP/UDP): port listesinde "Ağ" seçilince görünür
+        self.net_box = QWidget()
+        self.net_box.setObjectName("NetBox")
+        nb = QVBoxLayout(self.net_box)
+        nb.setContentsMargins(0, 0, 0, 0)
+        nb.setSpacing(6)
+        self.seg_net = Segmented(["tcp", "udp"])
+        self.seg_net.changed.connect(lambda _: self._sync_port_kind())
+        nb.addWidget(self.seg_net)
+        self.net_host = QLineEdit()
+        self.net_host.setPlaceholderText("192.168.1.50")
+        self.net_host.textChanged.connect(lambda _: self._refresh_summaries())
+        self.net_port = QSpinBox()
+        self.net_port.setRange(1, 65535)
+        self.net_port.setValue(5000)
+        self.net_port.setButtonSymbols(QSpinBox.NoButtons)
+        self.net_port.setFixedWidth(76)
+        self.net_port.valueChanged.connect(lambda _: self._refresh_summaries())
+        self.lbl_net_colon = QLabel(":")
+        self.lbl_net_listen = QLabel()
+        self.net_manual = QWidget()                 # elle adres: IP ve port kutuları
+        self.net_manual.setObjectName("NetManual")
+        row = QHBoxLayout(self.net_manual)
+        row.setContentsMargins(0, 0, 0, 0)
+        row.setSpacing(6)
+        row.addWidget(self.lbl_net_listen)
+        row.addWidget(self.net_host, 1)
+        row.addWidget(self.lbl_net_colon)
+        row.addWidget(self.net_port)
+        row.addStretch(0)
+        nb.addWidget(self.net_manual)
+        # ağda bulunan kart: bilgi satırı, ad verme ve "kartı göster"
+        self.dev_box = QWidget()
+        self.dev_box.setObjectName("DevBox")
+        db = QVBoxLayout(self.dev_box)
+        db.setContentsMargins(0, 0, 0, 0)
+        db.setSpacing(6)
+        self.lbl_dev_info = hint_label()
+        self.lbl_dev_info.setTextFormat(Qt.PlainText)       # kartın adı / donanım yazısı ağdan gelir
+        self.lbl_dev_info.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        db.addWidget(self.lbl_dev_info)
+        self.btn_dev_rename = QPushButton()
+        self.btn_dev_rename.clicked.connect(self._rename_device)
+        self.btn_dev_identify = QPushButton()
+        self.btn_dev_identify.clicked.connect(self._identify_device)
+        drow = hrow(self.btn_dev_rename, self.btn_dev_identify, stretch_first=False)
+        drow.addStretch(1)
+        db.addLayout(drow)
+        nb.addWidget(self.dev_box)
+        self.lbl_net_hint = hint_label()
+        self.lbl_net_hint.setTextFormat(Qt.PlainText)
+        self.lbl_net_hint.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        nb.addWidget(self.lbl_net_hint)
+        self.btn_net_diag = QPushButton()
+        self.btn_net_diag.setObjectName("Link")
+        self.btn_net_diag.setCursor(Qt.PointingHandCursor)
+        self.btn_net_diag.clicked.connect(self._open_net_diag)
+        nb.addLayout(hrow(self.btn_net_diag, QWidget(), stretch_first=False))
+        c.add(self.net_box)
+        self.net_box.hide()
         self.lbl_baud = c.label()
         self.baud_cb = QComboBox()
         self.baud_cb.setEditable(True)
@@ -547,14 +720,16 @@ class MainWindow(QMainWindow):
         w = QWidget()
         v = QVBoxLayout(w)
         v.setContentsMargins(0, 0, 0, 0)
-        v.setSpacing(10)
+        v.setSpacing(8)
 
-        tiles = QHBoxLayout()
-        tiles.setSpacing(10)
+        self.tiles_box = QWidget()
+        tiles = QHBoxLayout(self.tiles_box)
+        tiles.setContentsMargins(0, 0, 0, 0)
+        tiles.setSpacing(8)
         self.tile_rows, self.tile_rate, self.tile_missing, self.tile_dur, self.tile_status = (Tile() for _ in range(5))
         for tl in (self.tile_rows, self.tile_rate, self.tile_missing, self.tile_dur, self.tile_status):
             tiles.addWidget(tl, 1)
-        v.addLayout(tiles)
+        v.addWidget(self.tiles_box)
 
         self.progress = QProgressBar()
         self.progress.setRange(0, 1000)
@@ -613,8 +788,22 @@ class MainWindow(QMainWindow):
         split.addWidget(self._build_terminal_panel())
         split.setStretchFactor(0, 3)
         split.setStretchFactor(1, 2)
-        split.setSizes([480, 260])
+        split.setSizes([520, 220])
         v.addWidget(split, 1)
+        # grafik ayrı pencereye alınınca ana pencerede yerinde duran ince bilgi kutusu
+        self.detach_ph = QFrame()
+        self.detach_ph.setObjectName("Panel")
+        dh = QHBoxLayout(self.detach_ph)
+        dh.setContentsMargins(14, 10, 10, 10)
+        self.lbl_detach_ph = QLabel()
+        self.lbl_detach_ph.setObjectName("PhLabel")
+        self.btn_detach_back = QPushButton()
+        self.btn_detach_back.setObjectName("Link")
+        self.btn_detach_back.clicked.connect(lambda: self._set_detached(False))
+        dh.addWidget(self.lbl_detach_ph, 1)
+        dh.addWidget(self.btn_detach_back)
+        self.detach_ph.setMaximumHeight(56)
+        self.detach_ph.hide()
         return w
 
     def _build_plot_panel(self) -> QWidget:
@@ -632,6 +821,35 @@ class MainWindow(QMainWindow):
         h.lay.insertWidget(0, self.btn_plot_toggle)
         h.title.setCursor(Qt.PointingHandCursor)
         h.title.installEventFilter(self)
+        # İmleç / FFT / Not başlık satırında (ayrı bir satır grafiğe yer bıraksın)
+        h.lay.takeAt(2)                                   # PanelHeader'ın boşluğu; yerine araçlar esner
+        self.plot_tools = QWidget()
+        self.plot_tools.setObjectName("ToolsRow")
+        tools = QHBoxLayout(self.plot_tools)
+        tools.setContentsMargins(6, 0, 0, 0)
+        tools.setSpacing(4)
+        self.btn_cursor = QPushButton()
+        self.btn_cursor.setObjectName("Tool")
+        self.btn_cursor.setCheckable(True)
+        self.btn_cursor.toggled.connect(self._toggle_cursors)
+        self.btn_fft = QPushButton()
+        self.btn_fft.setObjectName("Tool")
+        self.btn_fft.setCheckable(True)
+        self.btn_fft.toggled.connect(self._toggle_fft)
+        self.btn_note = QPushButton()
+        self.btn_note.setObjectName("Tool")
+        self.btn_note.clicked.connect(self._add_note)
+        self.lbl_readout = QLabel()
+        self.lbl_readout.setObjectName("Readout")
+        self.lbl_readout.setTextFormat(Qt.PlainText)
+        self.lbl_readout.setMinimumWidth(10)
+        self.lbl_readout.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)   # uzun yazı başlığı itmesin
+        tools.addWidget(self.btn_cursor)
+        tools.addWidget(self.btn_fft)
+        tools.addWidget(self.btn_note)
+        tools.addSpacing(8)
+        tools.addWidget(self.lbl_readout, 1)
+        h.lay.insertWidget(2, self.plot_tools, 1)
         self.lbl_x = h.add(QLabel())
         self.lbl_x.setObjectName("FieldLabel")
         self.x_cb = h.add(QComboBox())
@@ -648,7 +866,33 @@ class MainWindow(QMainWindow):
         self.btn_fit.clicked.connect(self._fit_plot)
         self.btn_png = h.add(QPushButton())
         self.btn_png.clicked.connect(self._save_png)
+        self.btn_focus = h.add(QPushButton("⛶"))
+        self.btn_focus.setObjectName("Tool")
+        self.btn_focus.setCheckable(True)
+        self.btn_focus.clicked.connect(lambda on: self._set_focus(on))
+        self.btn_detach = h.add(QPushButton("⧉"))
+        self.btn_detach.setObjectName("Tool")
+        self.btn_detach.setCheckable(True)
+        self.btn_detach.clicked.connect(lambda on: self._set_detached(on))
         v.addWidget(h)
+        # odak modunda: üstteki kutuların yerine tek satır özet
+        self.focus_bar = QLabel()
+        self.focus_bar.setObjectName("FocusBar")
+        self.focus_bar.setTextFormat(Qt.RichText)
+        self.focus_bar.hide()
+        v.addWidget(self.focus_bar)
+        # kanal satırı (grafiğin üstüne binen kutu yerine): tıklayınca kanal gizlenir / görünür
+        self.chip_row = QWidget()
+        self.chip_row.setObjectName("ChipRow")
+        self.chip_lay = QHBoxLayout(self.chip_row)
+        self.chip_lay.setContentsMargins(2, 0, 2, 2)
+        self.chip_lay.setSpacing(6)
+        self.chip_lay.addStretch(1)
+        self.chip_row.hide()
+        self._chips: dict[str, QPushButton] = {}
+        self._chip_sig = None
+        self._hidden_ch: set[str] = set()
+        v.addWidget(self.chip_row)
 
         pg.setConfigOptions(antialias=True, background=th.BG_PLOT, foreground=th.MUTED)
         self.plot = pg.PlotWidget()
@@ -656,39 +900,17 @@ class MainWindow(QMainWindow):
         pi.showGrid(x=True, y=True, alpha=0.12)
         pi.setClipToView(True)
         pi.setDownsampling(auto=True, mode="peak")
-        self.legend = pi.addLegend(offset=(12, 8))
+        self.legend = pi.addLegend(offset=(12, 8))      # ekranda kanal satırı var; lejant sadece PNG'de
         self.legend.setVisible(False)
-
-        # Analiz satırı: imleç, FFT, not
-        self.plot_tools = QWidget()
-        tools = QHBoxLayout(self.plot_tools)
-        tools.setContentsMargins(0, 0, 0, 0)
-        tools.setSpacing(6)
-        self.btn_cursor = QPushButton()
-        self.btn_cursor.setObjectName("Tool")
-        self.btn_cursor.setCheckable(True)
-        self.btn_cursor.toggled.connect(self._toggle_cursors)
-        self.btn_fft = QPushButton()
-        self.btn_fft.setObjectName("Tool")
-        self.btn_fft.setCheckable(True)
-        self.btn_fft.toggled.connect(self._toggle_fft)
-        self.btn_note = QPushButton()
-        self.btn_note.setObjectName("Tool")
-        self.btn_note.clicked.connect(self._add_note)
-        self.lbl_readout = QLabel()
-        self.lbl_readout.setObjectName("Readout")
-        self.lbl_readout.setTextFormat(Qt.PlainText)
-        self.lbl_readout.setMinimumWidth(10)
-        tools.addWidget(self.btn_cursor)
-        tools.addWidget(self.btn_fft)
-        tools.addWidget(self.btn_note)
-        tools.addSpacing(8)
-        tools.addWidget(self.lbl_readout, 1)
-        v.addWidget(self.plot_tools)
+        for ax in ("left", "bottom"):                     # "(x0.001)" gibi ölçek ekleri yazılmasın
+            pi.getAxis(ax).enableAutoSIPrefix(False)
+        self.plot.scene().sigMouseClicked.connect(self._on_plot_click)
 
         self.fft_plot = pg.PlotWidget()
         fpi = self.fft_plot.getPlotItem()
         fpi.showGrid(x=True, y=True, alpha=0.12)
+        for ax in ("left", "bottom"):
+            fpi.getAxis(ax).enableAutoSIPrefix(False)
         self.fft_plot.hide()
         self.plot_split = QSplitter(Qt.Vertical)
         self.plot_split.setChildrenCollapsible(False)
@@ -725,10 +947,16 @@ class MainWindow(QMainWindow):
         self.chk_pause = QCheckBox()
         self.btn_clear = QPushButton()
         self.btn_clear.clicked.connect(lambda: self.term.clear())
-        for w_ in (self.chk_hex, self.chk_pause, self.btn_clear):
+        self.btn_bottom = QToolButton()
+        self.btn_bottom.setObjectName("Chevron")
+        self.btn_bottom.setText("▾")
+        self.btn_bottom.setCursor(Qt.PointingHandCursor)
+        self.btn_bottom.clicked.connect(lambda: self._set_bottom_collapsed(not self._bottom_collapsed))
+        for w_ in (self.chk_hex, self.chk_pause, self.btn_clear, self.btn_bottom):
             ch.addWidget(w_)
         self.tabs.setCornerWidget(corner, Qt.TopRightCorner)
         self.tabs.currentChanged.connect(self._on_tab_changed)
+        self.tabs.tabBarClicked.connect(lambda _i: self._bottom_collapsed and self._set_bottom_collapsed(False))
 
         term_page = QWidget()
         v = QVBoxLayout(term_page)
@@ -890,11 +1118,11 @@ class MainWindow(QMainWindow):
         self.btn_open_saved.setText(t("open_saved"))
         self.btn_open_saved.setToolTip("Ctrl+O")
 
-        self.tile_rows.label.setText(t("st_rows").upper())
-        self.tile_rate.label.setText(t("st_rate").upper())
-        self.tile_missing.label.setText(t("st_missing").upper())
-        self.tile_dur.label.setText(t("st_duration").upper())
-        self.tile_status.label.setText(t("st_status").upper())
+        self.tile_rows.label.setText(_upper(t("st_rows"), self.lang))
+        self.tile_rate.label.setText(_upper(t("st_rate"), self.lang))
+        self.tile_missing.label.setText(_upper(t("st_missing"), self.lang))
+        self.tile_dur.label.setText(_upper(t("st_duration"), self.lang))
+        self.tile_status.label.setText(_upper(t("st_status"), self.lang))
 
         self.plot_hdr.title.setText(t("plot_title"))
         self.btn_plot_toggle.setToolTip(t("plot_show" if self._plot_collapsed else "plot_hide"))
@@ -916,6 +1144,17 @@ class MainWindow(QMainWindow):
         self.lbl_notes_empty.setText(t("notes_empty"))
         self.btn_cursor.setText(t("cursor_btn"))
         self.btn_cursor.setToolTip(t("cursor_tip"))
+        self.btn_focus.setToolTip(t("focus_exit" if self._focus else "focus_tip"))
+        self.btn_detach.setToolTip(t("detach_back" if self._detached else "detach_tip"))
+        self.lbl_detach_ph.setText(t("detach_ph"))
+        self.btn_detach_back.setText(t("detach_back"))
+        self.btn_bottom.setToolTip(t("bottom_show" if self._bottom_collapsed else "bottom_hide"))
+        self.btn_side.setToolTip(t("side_show" if self._side_collapsed else "side_hide") + "  (Ctrl+B)")
+        self.btn_rail_open.setToolTip(t("side_show") + "  (Ctrl+B)")
+        for b in self._chips.values():
+            b.setToolTip(t("chip_tip"))
+        if self._detach_win is not None:
+            self._detach_win.setWindowTitle(t("detach_title"))
         self.btn_fft.setText(t("fft_btn"))
         self.btn_fft.setToolTip(t("fft_tip"))
         self.btn_note.setText(t("note_btn"))
@@ -940,6 +1179,19 @@ class MainWindow(QMainWindow):
         self.banner_open.setText(t("open_file"))
         self.banner_folder.setText(t("open_folder"))
 
+        k = self.port_cb.findData(NET_PORT)
+        if k >= 0:
+            self.port_cb.setItemText(k, t("net_port"))
+        self.seg_net.set_texts({"tcp": "TCP", "udp": "UDP"})
+        self.btn_dev_rename.setText(t("dev_rename"))
+        self.btn_dev_rename.setToolTip(t("dev_rename_tip"))
+        self.btn_dev_identify.setText(t("dev_identify"))
+        self.btn_dev_identify.setToolTip(t("dev_identify_tip"))
+        self.btn_net_diag.setText(t("net_diag_link"))
+        if getattr(self, "_port_sig", None) and self.port_cb.count() > 0:
+            self._port_sig = (self._port_sig[0], None, None)   # kart adları ("aranıyor…") yeni dilde yazılsın
+            self._refresh_ports(silent=True)
+        self._sync_port_kind()
         idx = self.port_cb.findData(DEMO_PORT)
         if idx >= 0:
             self.port_cb.setItemText(idx, t("demo_port"))
@@ -1005,6 +1257,7 @@ class MainWindow(QMainWindow):
         self._style_plot()
         for i, c in enumerate(self._curves.values()):   # yakınlaştırma korunur, sadece renkler değişir
             c.setPen(pg.mkPen(th.SERIES[i % len(th.SERIES)], width=1.6))
+        self._chip_sig = None
         self._plot_sig = None
         self._set_status_dot(self.engine is not None and not self.engine.reconnecting)
         self._sync_theme_menu()
@@ -1062,6 +1315,10 @@ class MainWindow(QMainWindow):
         self.trig_dur.setValue(max(analysis.TRIG_DUR_MIN, min(analysis.TRIG_DUR_MAX, sv("trig_dur", 60, int))))
         self._sync_trig_widgets()
         self.chk_reconnect.setChecked(sv("reconnect", True, bool))
+        self.seg_net.set_value("udp" if sv("net_proto", "tcp") == "udp" else "tcp")
+        self.net_host.setText(sv("net_host", "", str))
+        self.net_port.setValue(max(1, min(65535, sv("net_port", 5000, int))))
+        self._sync_port_kind()
         self.act_upd_auto.setChecked(sv("upd_auto", True, bool))
         self.act_upd_beta.setChecked(sv("upd_beta", False, bool))
         self.seg_dfmt.set_value("binary" if sv("data_format", "text") == "binary" else "text")
@@ -1093,6 +1350,13 @@ class MainWindow(QMainWindow):
         for key, card in self._cards().items():
             card.set_collapsed(bool(col.get(key, False)))
         self._set_plot_collapsed(bool(col.get("plot", False)), save=False)
+        self._set_sidebar_collapsed(bool(col.get("side", False)), save=False)
+        if "bottom" in col:
+            self._set_bottom_collapsed(bool(col["bottom"]), save=False)
+        else:                                       # ilk açılış: alçak ekranda (ör. 1366×768) alt panel katlı
+            scr = QGuiApplication.primaryScreen()
+            if scr is not None and scr.availableGeometry().height() < 800:
+                self._set_bottom_collapsed(True, save=False)
 
     def _reset_settings(self) -> None:
         t = self.t
@@ -1125,7 +1389,14 @@ class MainWindow(QMainWindow):
     def _save_settings(self) -> None:
         s = self.settings
         s.setValue("port", self.port_cb.currentData() or "")
+        if netport.is_dev(self.port_cb.currentData()):
+            d = self._current_device()
+            if d is not None:
+                s.setValue("net_dev_name", self._dev_label(d))
         s.setValue("baud", self.baud_cb.currentText())
+        s.setValue("net_proto", self.seg_net.value())
+        s.setValue("net_host", self.net_host.text().strip())
+        s.setValue("net_port", self.net_port.value())
         s.setValue("mode", self.seg_mode.value())
         s.setValue("fs", self.fs_spin.value())
         s.setValue("seq", self.seq_cb.currentData())
@@ -1147,7 +1418,7 @@ class MainWindow(QMainWindow):
         s.setValue("window", self.win_cb.currentData())
         s.setValue("eol", self.eol_cb.currentData())
         s.setValue("geometry", self.saveGeometry())
-        if not self._plot_collapsed:           # gizliyken küçülmüş hâli değil, açık hâli hatırlansın
+        if not (self._plot_collapsed or self._bottom_collapsed or self._detached):   # açık hâl hatırlansın
             s.setValue("splitter", self.splitter.saveState())
         s.setValue("collapsed", json.dumps(self._collapsed_state()))
         s.setValue("lang", self.lang)
@@ -1164,19 +1435,33 @@ class MainWindow(QMainWindow):
     def _refresh_ports(self, initial=False, silent=False, manual=False) -> None:
         if self.engine is not None and not manual:
             return
+        if manual:
+            self.disc.query_now()                      # ağdaki kartları da hemen yeniden sor
+        if self.port_cb.view().isVisible():
+            return                                     # liste açıkken değiştirme (kullanıcı seçiyor)
         try:
             ports = list_ports()
         except Exception:
             ports = []
-        sig = tuple((p, d) for p, d, _ in ports)
+        devs = self.disc.devices() if self.disc.running else []
+        self._note_new_devices(devs)
+        cur = self.port_cb.currentData()
+        if initial:
+            cur = self._sv("port", "")
+        missing = None                                  # hatırlanan ama şu an görünmeyen kart
+        if netport.is_dev(cur) and not any(cur == self._dev_data(d) for d in devs):
+            missing = cur
+        ser_sig = tuple((p, d) for p, d, _ in ports)
+        sig = (ser_sig, tuple((d.id, self._dev_label(d), d.ip) for d in devs), missing)
         if sig == self._port_sig and not initial:
             if manual:
                 self._log(self.t("msg_ports", n=len(ports)), "info")
             return
+        ser_changed = self._port_sig is None or self._port_sig[0] != ser_sig
         self._port_sig = sig
-        cur = self.port_cb.currentData()
-        if initial:
-            cur = self._sv("port", "")
+        # ilk açılışta COM port yoksa DEMO seçilir; kullanıcı seçmediyse ilk bulunan kart ona tercih edilir
+        if devs and not self._port_user_picked and cur == DEMO_PORT and not initial:
+            cur = self._dev_data(devs[0])
         self.port_cb.blockSignals(True)
         self.port_cb.clear()
         for dev, desc, is_stm in ports:
@@ -1184,6 +1469,14 @@ class MainWindow(QMainWindow):
             self.port_cb.addItem(("★ " if is_stm else "") + label, dev)
             self.port_cb.setItemData(self.port_cb.count() - 1, _tip(desc), Qt.ToolTipRole)
         self.port_cb.addItem(self.t("demo_port"), DEMO_PORT)
+        for d in devs:
+            self.port_cb.addItem(self.t("dev_item", name=self._dev_label(d), ip=d.ip), self._dev_data(d))
+            self.port_cb.setItemData(self.port_cb.count() - 1,             # karttan gelen yazı: HTML sayılmasın
+                                     _tip(self.t("dev_info", ip=d.ip, fw=d.fw or "?", id=d.id)), Qt.ToolTipRole)
+        if missing:
+            name = self._sv("net_dev_name", "", str) or self.t("dev_noname", short=missing[6:][-4:])
+            self.port_cb.addItem(self.t("dev_item_missing", name=name), missing)
+        self.port_cb.addItem(self.t("net_port"), NET_PORT)
         i = self.port_cb.findData(cur) if cur else -1
         if i < 0:
             stm = next((k for k, (_, _, s) in enumerate(ports) if s), None)
@@ -1192,11 +1485,194 @@ class MainWindow(QMainWindow):
                 i = self.port_cb.findData(DEMO_PORT)
         self.port_cb.setCurrentIndex(i)
         self.port_cb.blockSignals(False)
+        self._on_port_changed()
+        if not ser_changed and not manual:
+            return
         if not silent or manual:
             self._log(self.t("msg_ports", n=len(ports)) if ports else self.t("no_port"),
                       "info" if ports else "warn")
         elif ports and len(ports) > 0 and not initial:
             self._log(self.t("msg_ports", n=len(ports)), "info")
+
+    # ================================================================ AĞDA BULUNAN KARTLAR
+    @staticmethod
+    def _dev_data(d) -> str:
+        return f"dev://{d.id}"
+
+    def _dev_label(self, d) -> str:
+        return d.label(self.t("dev_noname"))
+
+    def _current_device(self):
+        data = self.port_cb.currentData()
+        if not netport.is_dev(data):
+            return None
+        return self.disc.get(data[6:])
+
+    def _note_new_devices(self, devs) -> None:
+        for d in devs:
+            if d.id not in self._known_devs:
+                self._known_devs.add(d.id)
+                self._log(self.t("dev_found", name=self._dev_label(d), ip=d.ip), "ok")
+
+    def _on_port_changed(self) -> None:
+        """Bulunan bir kart seçilince kartın bildirdiği veri biçimi ve çalışma modu seçili gelir."""
+        d = self._current_device()
+        if d is not None and self.engine is None and d.id != self._dev_applied:
+            self._dev_applied = d.id
+            if d.mode in ("live", "dma") and d.mode != self.seg_mode.value():
+                self.seg_mode.set_value(d.mode)
+                self._on_mode_changed(d.mode)
+            if d.fmt in ("text", "binary") and d.fmt != self.seg_dfmt.value():
+                self.seg_dfmt.set_value(d.fmt)
+                self._on_dfmt_changed(d.fmt)
+            if not d.tcp and d.udp:
+                self.seg_net.set_value("udp")
+            elif d.tcp and not d.udp:
+                self.seg_net.set_value("tcp")
+        elif d is None and not netport.is_dev(self.port_cb.currentData()):
+            self._dev_applied = None
+        self._sync_port_kind()
+
+    def _rename_device(self) -> None:
+        t = self.t
+        d = self._current_device()
+        if d is None:
+            self._msg("warn", t("err_title"), t("dev_info_missing"))
+            return
+        n = netdiscovery.NAME_MAX_CHARS
+        name, ok = QInputDialog.getText(self, t("dev_rename_title"), t("dev_rename_prompt", n=n),
+                                        QLineEdit.Normal, d.name)
+        if not ok:
+            return
+        name = name.strip()
+        if not netdiscovery.valid_name(name):
+            self._msg("warn", t("err_title"), t("dev_rename_bad", n=n))
+            return
+        QApplication.setOverrideCursor(Qt.WaitCursor)
+        try:
+            res = self.disc.rename(d.id, name)
+        finally:
+            QApplication.restoreOverrideCursor()
+        if res is None:
+            self._log(t("dev_rename_fail"), "error")
+            self._msg("error", t("err_title"), t("dev_rename_fail"))
+            return
+        self.settings.setValue("net_dev_name", name)
+        self._log(t("dev_rename_ok", name=name), "ok")
+        self._refresh_ports(silent=True)
+
+    def _identify_device(self) -> None:
+        d = self._current_device()
+        if d is None:
+            return
+        QApplication.setOverrideCursor(Qt.WaitCursor)
+        try:
+            res = self.disc.identify(d.id)
+        finally:
+            QApplication.restoreOverrideCursor()
+        if res is None:
+            self._log(self.t("dev_identify_fail"), "warn")
+        else:
+            self._log(self.t("dev_identify_ok", name=self._dev_label(res)), "info")
+
+    def _open_net_diag(self) -> None:
+        self.disc.start()
+        NetDiagDialog(self, self.t, self.disc).exec()
+        self._refresh_ports(silent=True)
+
+    # ================================================================ AĞ (TCP/UDP)
+    def _net_address(self) -> str | None:
+        """Seçili ağ ayarları: 'tcp://ip:port' / 'udp://:port'. TCP'de IP yoksa None."""
+        proto = self.seg_net.value()
+        host = self.net_host.text().strip()
+        if proto == "tcp" and not host:
+            return None
+        return netport.make_address(proto, "" if proto == "udp" else host, self.net_port.value())
+
+    def _sync_port_kind(self) -> None:
+        """Seri port: baud hızı. Ağda bulunan kart: TCP/UDP ve kart bilgisi. Elle adres: IP / port kutuları."""
+        if not hasattr(self, "net_box"):
+            return
+        t = self.t
+        data = self.port_cb.currentData()
+        manual = data == NET_PORT
+        is_dev = netport.is_dev(data)
+        net = manual or is_dev
+        self.net_box.setVisible(net)
+        self.lbl_baud.setVisible(not net)
+        self.baud_cb.setVisible(not net)
+        self.net_manual.setVisible(manual)
+        self.dev_box.setVisible(is_dev)
+        udp = self.seg_net.value() == "udp"
+        self.chk_reconnect.setText(t("autoreconnect_net" if net else "autoreconnect"))
+        if is_dev:
+            d = self._current_device()
+            tcp_ok = d is None or bool(d.tcp)
+            udp_ok = d is None or bool(d.udp)
+            self.seg_net.buttons["tcp"].setEnabled(tcp_ok)
+            self.seg_net.buttons["udp"].setEnabled(udp_ok)
+            fresh = d is not None and any(x.id == d.id for x in self.disc.devices())
+            if d is None or not fresh:
+                self.lbl_dev_info.setText(t("dev_info_missing"))
+            else:
+                info = t("dev_info", ip=d.ip, fw=d.fw or "?", id=d.id)
+                if d.hw:
+                    info += " · " + d.hw
+                self.lbl_dev_info.setText(info)
+            self.btn_dev_rename.setEnabled(fresh)
+            self.btn_dev_identify.setEnabled(fresh)
+            hint = t("dev_hint_udp" if udp else "dev_hint_tcp")
+            if d is not None and not tcp_ok:
+                hint = t("dev_only_udp")
+            elif d is not None and not udp_ok:
+                hint = t("dev_only_tcp")
+            if fresh and not d.reachable(self.disc.local_ips or netport.local_ipv4()):
+                hint = t("dev_unreachable", ip=d.ip) + "\n" + hint
+            self.lbl_net_hint.setText(hint)
+            self.btn_net_diag.setVisible(not fresh)
+        elif manual:
+            for b in self.seg_net.buttons.values():
+                b.setEnabled(True)
+            self.net_host.setVisible(not udp)
+            self.lbl_net_colon.setVisible(not udp)
+            self.lbl_net_listen.setVisible(udp)
+            self.lbl_net_listen.setText(t("net_listen_port"))
+            if udp:
+                ips = ", ".join(netport.local_ipv4()) or "?"
+                hint = t("net_hint_udp", ips=ips)
+            else:
+                hint = t("net_hint_tcp")
+            n = len(self.disc.devices()) if self.disc.running else 0
+            hint += "\n" + (t("net_scan_some", n=n) if n else t("net_scan_none"))
+            self.lbl_net_hint.setText(hint)
+            self.btn_net_diag.setVisible(True)
+        self._refresh_summaries()
+
+    def _net_error_text(self, address: str, e: Exception, dev_name: str = "") -> str:
+        t = self.t
+        if isinstance(e, netport.DeviceNotFound):
+            return t("dev_err_notfound", name=dev_name or e.dev_id)
+        if netport.is_dev(address):
+            if isinstance(e, ValueError):
+                return t("msg_open_err", err=e)
+            d = self.disc.get(address[6:].split("/")[0])
+            host, port = (d.ip, d.tcp) if d is not None else (dev_name, "?")
+            if isinstance(e, (TimeoutError, socket.timeout)):
+                return t("net_err_timeout", host=host, port=port)
+            if isinstance(e, ConnectionRefusedError):
+                return t("net_err_refused", host=host, port=port)
+            return t("net_err_tcp", host=host, port=port, err=e)
+        try:
+            proto, host, port = netport.parse(address)
+        except ValueError:
+            return t("msg_open_err", err=e)
+        if proto == "udp":
+            return t("net_err_udp", port=port, err=e)
+        if isinstance(e, (TimeoutError, socket.timeout)):
+            return t("net_err_timeout", host=host, port=port)
+        if isinstance(e, ConnectionRefusedError):
+            return t("net_err_refused", host=host, port=port)
+        return t("net_err_tcp", host=host, port=port, err=e)
 
     # ================================================================ BAĞLANTI
     def _on_mode_changed(self, mode: str) -> None:
@@ -1237,6 +1713,12 @@ class MainWindow(QMainWindow):
         self.btn_connect.setObjectName("Danger" if on else "Primary")
         self.btn_connect.style().unpolish(self.btn_connect)
         self.btn_connect.style().polish(self.btn_connect)
+        if hasattr(self, "btn_rail_conn"):
+            self.btn_rail_conn.setText("■" if on else "▶")
+            self.btn_rail_conn.setToolTip(self.t("disconnect" if on else "connect") + "  (F5)")
+            self.btn_rail_conn.setProperty("state", "on" if on else "off")
+            self.btn_rail_conn.style().unpolish(self.btn_rail_conn)
+            self.btn_rail_conn.style().polish(self.btn_rail_conn)
 
     def _toggle_connect(self) -> None:
         if self.engine is None:
@@ -1250,6 +1732,17 @@ class MainWindow(QMainWindow):
         if not port:
             self._msg("warn", t("err_title"), t("no_port"))
             return
+        if port == NET_PORT:
+            port = self._net_address()
+            if port is None:
+                self._msg("warn", t("err_title"), t("net_need_ip"))
+                self.net_host.setFocus()
+                return
+        dev_name = ""
+        if netport.is_dev(port):
+            d = self._current_device()
+            dev_name = self._dev_label(d) if d is not None else (self._sv("net_dev_name", "", str) or port[6:])
+            port = netport.make_dev(port[6:], self.seg_net.value())
         if not self._confirm_discard():
             return
         try:
@@ -1258,18 +1751,26 @@ class MainWindow(QMainWindow):
             baud = 115200
         mode = self.seg_mode.value()
         dfmt = self._data_format
+        is_net = netport.is_net(port)
+        if is_net:
+            QApplication.setOverrideCursor(Qt.WaitCursor)     # TCP bağlanırken en fazla ~2 sn
         try:
             ser = open_port(port, baud, mode, binary=dfmt == "binary")
         except Exception as e:
-            self._log(t("msg_open_err", err=e), "error")
-            self._msg("error", t("err_title"), t("msg_open_err", err=e))
+            err = self._net_error_text(port, e, dev_name) if is_net else t("msg_open_err", err=e)
+            self._log(err, "error")
+            self._msg("error", t("err_title"), err)
             return
+        finally:
+            if is_net:
+                QApplication.restoreOverrideCursor()
 
         raw_path = None
         folder = self.folder_edit.text().strip() or self._default_folder()
         if self.chk_raw.isChecked():
             stamp = _dt.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-            safe_port = "".join(ch for ch in os.path.basename(port) if ch.isalnum()) or "port"
+            base = dev_name or os.path.basename(port.replace(":", "_"))
+            safe_port = "".join(ch for ch in base.replace(" ", "_") if ch.isalnum() or ch == "_") or "port"
             ext = ".bin" if dfmt == "binary" else ".txt"
             raw_path = os.path.join(folder, "ham", f"ham_{stamp}_{safe_port}{ext}")
 
@@ -1277,12 +1778,17 @@ class MainWindow(QMainWindow):
         prefix = t("channel_prefix")
         fs = self.fs_spin.value()
         port_name = "DEMO" if port == DEMO_PORT else port
+        dev = getattr(ser, "device", None)
+        if dev is not None:                              # ağda bulunan kart: "Ad (tcp://ip:port)"
+            dev_name = self._dev_label(dev)
+            port_name = f"{dev_name} ({ser.port})"
+            self.settings.setValue("net_dev_name", dev_name)
 
         trig = mode == "live" and self.chk_trig.isChecked()
 
         def factory():
             s = Session(mode=mode, seq_mode=seq_mode, channel_prefix=prefix,
-                        port=port_name, baud=baud, sample_rate=fs)
+                        port=port_name, baud=0 if is_net else baud, sample_rate=fs)
             s.seq32 = dfmt == "binary"          # ikili çerçevede sıra no 32 bit
             s.ephemeral = trig                  # tetikli kayıt: sürekli akış sadece arabellek
             return s
@@ -1297,6 +1803,7 @@ class MainWindow(QMainWindow):
         self.engine.start()
         self._conn_t0 = time.time()
         self._conn_info = (port_name, baud, mode)
+        self._conn_net = is_net
         self._alarm_armed, self._alarm_fired_t, self._alarm_pending = {}, {}, {}
         self._trig, self._trig_tail, self._trig_count = None, None, 0
         self._conn_trig = trig
@@ -1309,7 +1816,17 @@ class MainWindow(QMainWindow):
         self._style_connect_button()
         self._set_status_dot(True)
         self._update_status_text()
-        self._log(t("msg_connected", port=port_name, baud=baud, mode=t("mode_" + mode)), "ok")
+        self.disc.active = False                         # bağlıyken düzenli kart araması gerekmez
+        if dev is not None:
+            self._log(t("msg_connected_dev", name=dev_name, addr=ser.port.split("://", 1)[-1],
+                        proto=self.seg_net.value().upper(), mode=t("mode_" + mode)), "ok")
+        elif is_net:
+            self._log(t("msg_connected_net", addr=port_name, mode=t("mode_" + mode)), "ok")
+            if port.startswith("udp://"):
+                ips = ", ".join(netport.local_ipv4()) or "?"
+                self._log(t("msg_udp_listen", port=self.net_port.value(), ips=ips), "info")
+        else:
+            self._log(t("msg_connected", port=port_name, baud=baud, mode=t("mode_" + mode)), "ok")
         if dfmt == "binary":
             self._log(t("msg_binary_on"), "muted")
         if trig:
@@ -1348,6 +1865,7 @@ class MainWindow(QMainWindow):
         if eng is None:
             return
         self.engine = None
+        self.disc.active = True
         system.keep_awake(False)
         self._stop_repeats()
         QApplication.setOverrideCursor(Qt.WaitCursor)
@@ -1375,7 +1893,7 @@ class MainWindow(QMainWindow):
 
     def _set_controls_enabled(self, on: bool) -> None:
         for w in (self.port_cb, self.btn_refresh, self.baud_cb, self.seg_mode, self.seg_dfmt, self.fs_spin,
-                  self.seq_cb, self.btn_open_saved, self.chk_raw, self.chk_reconnect):
+                  self.seq_cb, self.btn_open_saved, self.chk_raw, self.chk_reconnect, self.net_box):
             w.setEnabled(on)
         if on and self._data_format == "binary":
             self.seq_cb.setEnabled(False)
@@ -1561,6 +2079,19 @@ class MainWindow(QMainWindow):
         self.banner.show()
 
     # ================================================================ İSTATİSTİK
+    def _update_focus_bar(self) -> None:
+        if not self.focus_bar.isVisible():
+            return
+        parts = []
+        for tl, key in ((self.tile_rows, "st_rows"), (self.tile_rate, "st_rate"), (self.tile_missing, "st_missing"),
+                        (self.tile_dur, "st_duration"), (self.tile_status, "st_status")):
+            color = (tl._last or (None, None, None))[2]
+            val = html.escape(tl.value.text())
+            if color:
+                val = f'<span style="color:{color}">{val}</span>'
+            parts.append(f'{html.escape(self.t(key))} <b style="color:{th.TEXT}">{val}</b>')
+        self.focus_bar.setText("&nbsp;&nbsp;·&nbsp;&nbsp;".join(parts))
+
     def _update_stats(self, force: bool = False) -> None:
         t = self.t
         self._refresh_summaries()
@@ -1622,6 +2153,7 @@ class MainWindow(QMainWindow):
                 self.tile_status.set(t("status_done"), " ", th.GREEN_TXT)
             else:
                 self.tile_status.set(t("status_idle"), " ", th.MUTED)
+        self._update_focus_bar()
 
     def _set_status_dot(self, on: bool) -> None:
         self.status_dot.setStyleSheet(f"color: {th.GREEN_TXT if on else th.RED_TXT}; font-size: 11pt;")
@@ -1629,7 +2161,8 @@ class MainWindow(QMainWindow):
     def _update_status_text(self) -> None:
         if self.engine is not None:
             port, baud, mode = self._conn_info
-            txt = f"{port} @ {baud} baud  ·  {self.t('mode_' + mode)}"
+            txt = f"{port}  ·  {self.t('mode_' + mode)}" if self._conn_net \
+                else f"{port} @ {baud} baud  ·  {self.t('mode_' + mode)}"
             if self._conn_trig:
                 tr = self._trig
                 txt += "  ·  " + (self.t("trig_status", s=int(min(self._trig_dur_s, tr.get("el", 0))), d=self._trig_dur_s)
@@ -1699,6 +2232,7 @@ class MainWindow(QMainWindow):
                 self.plot.removeItem(c)
             self._curves.clear()
             self.legend.clear()
+            self._chip_sig = None
             self._curve_owner = s
             self.plot.enableAutoRange()
             self._fft_fresh = True
@@ -1749,9 +2283,10 @@ class MainWindow(QMainWindow):
                 y = np.insert(y, gap_idx, np.nan)
             m = min(len(x), len(y))
             c.setData(x[:m], y[:m])
-        self.legend.setVisible(bool(self._curves))
+        self._sync_chips(names, labels)
         thr = self._draw_alarm_lines(names)
-        self._apply_plot_limits(x_raw, conv_ys, thr)
+        vis_ys = [y for name, y in zip(names, conv_ys) if name not in self._hidden_ch] or conv_ys
+        self._apply_plot_limits(x_raw, vis_ys, thr)
         self._last_plot = {"x": x_raw, "ys": conv_ys, "names": labels, "kind": kind, "fs": fs_eff, "t": t_est,
                            "unit_x": "s" if kind in ("time", "host") else ""}
         self._draw_notes(notes, start, n, x_raw, s)
@@ -2062,6 +2597,8 @@ class MainWindow(QMainWindow):
     def _collapsed_state(self) -> dict:
         d = {k: c.is_collapsed() for k, c in self._cards().items()}
         d["plot"] = self._plot_collapsed
+        d["bottom"] = self._bottom_collapsed
+        d["side"] = self._side_collapsed
         return d
 
     def _save_collapsed(self, *_) -> None:
@@ -2072,12 +2609,15 @@ class MainWindow(QMainWindow):
         on = bool(on)
         if on == self._plot_collapsed:
             return
+        if on and (self._focus or self._detached):      # büyütülmüş / ayrı penceredeki grafik katlanmaz
+            return
         if on:
             self._split_open = self.splitter.sizes()
         self._plot_collapsed = on
         for w in (self.plot_tools, self.plot_split, self.lbl_x, self.x_cb, self.lbl_win, self.win_cb,
-                  self.btn_fit, self.btn_png):
+                  self.btn_fit, self.btn_png, self.btn_focus, self.btn_detach):
             w.setVisible(not on)
+        self.chip_row.setVisible(not on and len(self._chips) > 1)
         self.btn_plot_toggle.setText("▸" if on else "▾")
         self.btn_plot_toggle.setToolTip(self.t("plot_show" if on else "plot_hide"))
         if on:
@@ -2106,7 +2646,15 @@ class MainWindow(QMainWindow):
         mode = t("mode_live_short") if self.seg_mode.value() == "live" else t("mode_dma_short")
         port = self.port_cb.currentData() or "—"
         fmt_ = t("fmt_bin_short") if self._data_format == "binary" else ""
-        self.card_conn.set_summary(" · ".join(x for x in (str(port), self.baud_cb.currentText(), mode, fmt_) if x))
+        if port == NET_PORT:
+            addr = self._net_address() or self.seg_net.value().upper()
+            self.card_conn.set_summary(" · ".join(x for x in (addr, mode, fmt_) if x))
+        elif netport.is_dev(port):
+            d = self.disc.get(port[6:])
+            name = self._dev_label(d) if d is not None else (self._sv("net_dev_name", "", str) or port[6:])
+            self.card_conn.set_summary(" · ".join(x for x in (name, self.seg_net.value().upper(), mode, fmt_) if x))
+        else:
+            self.card_conn.set_summary(" · ".join(x for x in (str(port), self.baud_cb.currentText(), mode, fmt_) if x))
         fs = self.fs_spin.value()
         self.card_data.set_summary(" · ".join(x for x in (
             f"{analysis.fmt(fs)} Hz" if fs > 0 else t("fs_unknown_short"),
@@ -2134,6 +2682,192 @@ class MainWindow(QMainWindow):
         if not (math.isfinite(x0) and math.isfinite(x1) and math.isfinite(lo) and math.isfinite(hi)):
             return None
         return x0, x1, lo, hi
+
+    # ================================================================ YERLEŞİM: sol panel, alt panel
+    def _set_sidebar_collapsed(self, on: bool, save: bool = True) -> None:
+        """Sol panel ince bir şeride iner (Ctrl+B); şeritte paneli açma ve bağlan düğmesi kalır."""
+        on = bool(on)
+        self._side_collapsed = on
+        if not self._focus:
+            self.sidebar.setVisible(not on)
+            self.side_rail.setVisible(on)
+        self.btn_side.setToolTip(self.t("side_show" if on else "side_hide") + "  (Ctrl+B)")
+        if save:
+            self._save_collapsed()
+
+    def _set_bottom_collapsed(self, on: bool, save: bool = True) -> None:
+        """Terminal / İstatistik / Notlar paneli sekme satırına iner; boşalan yeri grafik alır."""
+        on = bool(on)
+        if on == self._bottom_collapsed:
+            return
+        stack = self.tabs.findChild(QStackedWidget)
+        if on:
+            self._split_open_b = self.splitter.sizes()
+        self._bottom_collapsed = on
+        if stack is not None:
+            stack.setVisible(not on)
+        for w_ in (self.chk_hex, self.chk_pause, self.btn_clear):
+            w_.setVisible(not on)
+        self.btn_bottom.setText("▸" if on else "▾")
+        self.btn_bottom.setToolTip(self.t("bottom_show" if on else "bottom_hide"))
+        if on:
+            self.tabs.setMinimumHeight(1)            # sayfaların en küçük boyu artık katlamayı engellemesin
+            hh = self.tabs.tabBar().sizeHint().height() + 20
+            self.bottom_panel.setMaximumHeight(hh)
+            total = sum(self.splitter.sizes())
+            self.splitter.setSizes([max(100, total - hh), hh])
+        else:
+            self.tabs.setMinimumHeight(0)
+            self.bottom_panel.setMaximumHeight(16777215)
+            sizes = getattr(self, "_split_open_b", None)
+            if sizes and sum(sizes) > 0 and sizes[1] > 120:
+                self.splitter.setSizes(sizes)
+            else:
+                total = sum(self.splitter.sizes())
+                self.splitter.setSizes([int(total * .68), int(total * .32)])
+            if self.tabs.currentIndex() == 1:
+                self._update_analysis()
+        if save:
+            self._save_collapsed()
+
+    # ================================================================ GRAFİK: kanal satırı
+    def _sync_chips(self, names: list, labels: list) -> None:
+        """Grafiğin üstündeki kanal düğmeleri: renk + ad; tıklayınca kanal gizlenir / görünür."""
+        sig = tuple(zip(names, labels))
+        if sig == self._chip_sig:
+            return
+        self._chip_sig = sig
+        for b in self._chips.values():
+            self.chip_lay.removeWidget(b)
+            b.deleteLater()
+        self._chips = {}
+        for i, (name, lbl) in enumerate(sig):
+            b = QPushButton(_swatch(th.SERIES[i % len(th.SERIES)], 10), lbl.replace("&", "&&"))
+            b.setObjectName("Chip")
+            b.setCheckable(True)
+            b.setChecked(name not in self._hidden_ch)
+            b.setCursor(Qt.PointingHandCursor)
+            b.setToolTip(self.t("chip_tip"))
+            b.toggled.connect(lambda on, name=name: self._toggle_channel(name, on))
+            self.chip_lay.insertWidget(self.chip_lay.count() - 1, b)
+            self._chips[name] = b
+            c = self._curves.get(name)
+            if c is not None:
+                c.setVisible(name not in self._hidden_ch)
+        self.chip_row.setVisible(len(sig) > 1 and not self._plot_collapsed)
+
+    def _toggle_channel(self, name: str, on: bool) -> None:
+        if on:
+            self._hidden_ch.discard(name)
+        else:
+            self._hidden_ch.add(name)
+        for curves in (self._curves, self._fft_curves):
+            c = curves.get(name)
+            if c is not None:
+                c.setVisible(on)
+        self._plot_sig = None                    # eksen sınırları görünen kanallara göre yeniden
+        self._update_plot()
+
+    # ================================================================ GRAFİK: odak modu, tam ekran, ayrı pencere
+    def _on_plot_click(self, ev) -> None:
+        """Grafikte boş yere çift tıklama: odak modu aç / kapat."""
+        try:
+            if ev.double() and ev.button() == Qt.LeftButton:
+                if self._detached and self._detach_win is not None:
+                    self._detach_win.toggle_full()
+                else:
+                    self._set_focus(not self._focus)
+                ev.accept()
+        except AttributeError:
+            pass
+
+    def _set_focus(self, on: bool, full: bool = False) -> None:
+        """Odak modu: sol panel, kutular ve alt panel gizlenir, grafik pencereyi kaplar.
+        full=True (F11): ayrıca tam ekran; Oskilo başlığı da gizlenir. Esc ile çıkılır."""
+        on = bool(on)
+        if self._detached:                        # grafik ayrı pencerede: onu büyüt
+            if self._detach_win is not None and (full or on != self._detach_win.isFullScreen()):
+                self._detach_win.toggle_full()
+            self.btn_focus.setChecked(self._detach_win is not None and self._detach_win.isFullScreen())
+            return
+        if on and self._plot_collapsed:
+            self._set_plot_collapsed(False)
+        was_full = self._focus_full
+        self._focus = on
+        self._focus_full = on and (full or was_full)
+        self.btn_focus.setChecked(on)
+        self.btn_focus.setToolTip(self.t("focus_exit" if on else "focus_tip"))
+        self.act_esc.setEnabled(on)
+        self.sidebar.setVisible(not on and not self._side_collapsed)
+        self.side_rail.setVisible(not on and self._side_collapsed)
+        self.tiles_box.setVisible(not on)
+        self.bottom_panel.setVisible(not on)
+        self.focus_bar.setVisible(on)
+        self.header_frame.setVisible(not self._focus_full)
+        if self._focus_full and not was_full:
+            self._pre_full_max = self.isMaximized()
+            self.showFullScreen()
+        elif was_full and not self._focus_full:
+            if getattr(self, "_pre_full_max", False):
+                self.showMaximized()
+            else:
+                self.showNormal()
+        if on:
+            self._update_focus_bar()
+        self._plot_sig = None
+        QTimer.singleShot(0, self._update_plot)
+
+    def _set_detached(self, on: bool) -> None:
+        """Grafiği ayrı bir pencereye taşır (ikinci monitör / projeksiyon). Pencere kapanınca geri gelir."""
+        on = bool(on)
+        if on == self._detached:
+            self.btn_detach.setChecked(on)
+            return
+        if on:
+            if self._focus:
+                self._set_focus(False)
+            if self._plot_collapsed:
+                self._set_plot_collapsed(False)
+            self._detached = True
+            self._split_before_detach = self.splitter.sizes()
+            self.splitter.replaceWidget(0, self.detach_ph)
+            self.detach_ph.show()
+            win = self._detach_win = DetachedPlot(self)
+            win.attach(self.plot_panel)
+            geo = self.settings.value("detach_geom")
+            if geo is not None:
+                try:
+                    win.restoreGeometry(geo)
+                except (TypeError, ValueError):
+                    pass
+            else:
+                win.resize(1100, 640)
+            self.btn_plot_toggle.hide()
+            win.show()
+            win.raise_()
+            total = sum(self.splitter.sizes())
+            self.splitter.setSizes([56, max(100, total - 56)])
+        else:
+            win = self._detach_win
+            self._detach_win = None
+            self._detached = False
+            if win is not None:
+                self.settings.setValue("detach_geom", win.saveGeometry())
+                win.release()
+                win.close_quiet()
+            self.splitter.replaceWidget(0, self.plot_panel)
+            self.plot_panel.show()
+            self.detach_ph.hide()
+            self.btn_plot_toggle.show()
+            sizes = getattr(self, "_split_before_detach", None)
+            if sizes and sum(sizes) > 0:
+                self.splitter.setSizes(sizes)
+        self.btn_detach.setChecked(on)
+        self.btn_detach.setToolTip(self.t("detach_back" if on else "detach_tip"))
+        self.btn_focus.setChecked(False)
+        self._plot_sig = None
+        QTimer.singleShot(0, self._update_plot)
+
 
     def _apply_plot_limits(self, x, ys, extra_y=()) -> None:
         """Sürükleme/yakınlaştırma verinin dışına taşmasın: görünüm, verinin biraz ötesinde durur;
@@ -2231,6 +2965,7 @@ class MainWindow(QMainWindow):
                         pen=pg.mkPen(th.SERIES[i % len(th.SERIES)], width=1.4), name=html.escape(name))
                     c.setDownsampling(auto=True, method="peak")
                     c.setClipToView(True)
+                    c.setVisible(name not in self._hidden_ch)
             fmax = 0.0
             for name, y in zip(lp["names"], lp["ys"]):
                 res = analysis.spectrum(y[i0:i1], fs)
@@ -2587,7 +3322,11 @@ class MainWindow(QMainWindow):
             return
         ex = ImageExporter(self.plot.getPlotItem())
         ex.parameters()["width"] = 1920
-        ex.export(path)
+        self.legend.setVisible(bool(self._curves))       # ekranda kanal satırı var; resimde lejant olsun
+        try:
+            ex.export(path)
+        finally:
+            self.legend.setVisible(False)
         self.last_saved = path
         self._log(self.t("msg_png", path=path), "ok")
 
@@ -3258,7 +3997,12 @@ class MainWindow(QMainWindow):
         if self._at_risk() and not self._confirm_discard():   # otomatik kayıt başarısız olduysa tekrar sor
             ev.ignore()
             return
+        if self._detached:
+            self._set_detached(False)
+        if self._focus:                               # gizli paneller kaydedilen yerleşimi bozmasın
+            self._set_focus(False)
         self._save_settings()
+        self.disc.stop()
         super().closeEvent(ev)
         if self._pending_update is not None:
             p = self._pending_update

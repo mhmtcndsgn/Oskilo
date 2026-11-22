@@ -201,7 +201,7 @@ QCheckBox::indicator:checked {{ background: {ACCENT}; border-color: {ACCENT_HI};
 #Tile {{ background: {BG_PANEL}; border: 1px solid {BORDER}; border-radius: 10px; }}
 #Tile QLabel {{ background: transparent; }}
 #TileLabel {{ color: {MUTED}; font-size: 8.5pt; font-weight: 600; }}
-#TileValue {{ font-size: 17pt; font-weight: 700; }}
+#TileValue {{ font-size: 14pt; font-weight: 700; }}
 #TileSub {{ color: {FAINT}; font-size: 8.5pt; }}
 
 #Panel {{ background: {BG_PANEL}; border: 1px solid {BORDER}; border-radius: 10px; }}
@@ -273,6 +273,17 @@ QPushButton#Tool:checked {{ background: {ACCENT}; border-color: {ACCENT_HI}; col
 QPushButton#Quick {{ padding: 3px 10px; font-weight: 600; border-radius: 12px; }}
 QPushButton#Quick:checked {{ background: {ACCENT}; border-color: {ACCENT_HI}; color: white; }}
 #Readout {{ color: {MUTED}; font-size: 9pt; background: transparent; }}
+QPushButton#Chip {{ padding: 2px 10px 2px 6px; border-radius: 11px; font-size: 9pt; background: transparent;
+    border: 1px solid {BORDER_SOFT}; color: {TEXT}; }}
+QPushButton#Chip:!checked {{ color: {FAINT}; border-style: dashed; }}
+QPushButton#Chip:hover {{ border-color: {BORDER}; }}
+#Rail {{ background: {BG_PANEL}; border: 1px solid {BORDER}; border-radius: 10px; }}
+QPushButton#RailBtn {{ padding: 0; min-width: 34px; max-width: 34px; min-height: 34px; max-height: 34px;
+    border-radius: 8px; font-size: 12pt; }}
+QPushButton#RailBtn[state="on"] {{ background: {RED}; border-color: {RED_HI}; color: white; }}
+QPushButton#RailBtn[state="off"] {{ background: {ACCENT}; border-color: {ACCENT_HI}; color: white; }}
+#FocusBar {{ color: {MUTED}; font-size: 9pt; background: transparent; padding: 0 2px; }}
+#ToolsRow, #ChipRow, #NetBox, #NetManual, #DevBox, #PhLabel {{ background: transparent; }}
 """
 
 
