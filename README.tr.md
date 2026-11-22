@@ -45,6 +45,7 @@
 - **🔔 Eşik alarmları:** kanal eşiği aşınca uyarı bandı, grafikte eşik çizgisi ve o satıra otomatik not; istenirse ses ve karta komut (örn. `STOP`). Geri dönüş payı sayesinde eşik etrafında titreyen sinyal alarm yağdırmaz.
 - **⏺️ Tetikli kayıt:** başında olmadığınız testlerde sadece olayları kaydedin. Bir alarmı *Kaydı başlat* olarak işaretleyin; alarm tetiklenince tetikten önceki saniyeler (0–60 sn) ve sonraki belirlenen süre ayrı bir dosyaya (`ad_tetik_…`) kaydedilir, ardından bir sonraki olay beklenir. Sürekli akış ekranda görünür ama diske yazılmaz.
 - **🔄 Uygulama içi güncelleme (Windows):** Yeni sürüm çıkınca üstte bir bant belirir. **Güncelle**'ye basınca yeni sürüm indirilir, `SHA256SUMS.txt` ve derlemenin dosya listesiyle doğrulanır, Oskilo yeni sürümle yeniden açılır. Yeni sürüm açılamazsa önceki sürüm otomatik geri gelir. macOS'ta yeni `.dmg` indirilip açılır.
+- **🌐 Ağ (Ethernet / Wi-Fi), IP yazmadan:** Oskilo ağ protokolünü bilen kartlar kendiliğinden bulunur ve COM portlarının yanında `🌐 kartın adı` olarak listelenir: kabloyu takın, kartı seçin, bağlanın. Oskilo kartı kimliğiyle hatırlar (IP değişebilir), bağlantı koparsa kendisi yeniden bağlanır, karta ad verebilir (kartın hafızasına yazılır) ve LED'ini yakıp söndürebilir. Varsayılan TCP, çok yüksek hızlar için UDP. Hazır kart yazılımı: [STM32 + W5500](firmware_ornek/stm32_w5500/) ve [ESP32 Wi-Fi](firmware_ornek/esp32_wifi/esp32_wifi.ino); protokol: [`docs/ag_protokolu.md`](docs/ag_protokolu.md). Diğer kartlara IP yazarak (TCP) ya da port dinleyerek (UDP) bağlanılabilir. `araclar/ag_test_karti.bat` sahte bir kart çalıştırır.
 - **Kart tanıma:** STM32 (ST-Link), Arduino, ESP32, CH340, CP2102, FTDI ve Raspberry Pi Pico portları ★ ile işaretlenir.
 - **Karta komut gönderme** (örneğin yeni aktarım istemek için `GONDER`), yazı ya da **HEX bayt** olarak; **↑ / ↓** ile önceki komutlar geri gelir. **HEX görünüm** ham baytları gösterir.
 - **Hızlı komut butonları:** sık gönderdiğiniz komutları buton yapın; istenirse belirli aralıkla tekrar gönderilir (örn. her 2 s'de `OKU`).
@@ -118,6 +119,7 @@ END,4000
 Hazır örnekler:
 - **STM32 (HAL):** [`firmware_ornek/veri_gonder.c`](firmware_ornek/veri_gonder.c): timer tetiklemeli ADC + DMA + UART gönderimi
 - **Arduino / ESP32 / ESP8266:** [`firmware_ornek/arduino_ornek/arduino_ornek.ino`](firmware_ornek/arduino_ornek/arduino_ornek.ino): canlı mod ya da `GONDER` komutuyla deney aktarımı
+- **Ağ, IP yazmadan:** [`firmware_ornek/stm32_w5500/`](firmware_ornek/stm32_w5500/) (STM32 + W5500 Ethernet, kütüphane + CubeMX rehberi) ve [`firmware_ornek/esp32_wifi/esp32_wifi.ino`](firmware_ornek/esp32_wifi/esp32_wifi.ino) (ESP32 Wi-Fi)
 - **İkili (CRC) biçim, her kart:** [`firmware_ornek/oskilo_ikili.h`](firmware_ornek/oskilo_ikili.h) (tek dosya) ve Arduino örneği [`firmware_ornek/arduino_ikili/arduino_ikili.ino`](firmware_ornek/arduino_ikili/arduino_ikili.ino). Uygulamada *Bağlantı → Veri biçimi → İkili (CRC)* seçin.
 
   ```
