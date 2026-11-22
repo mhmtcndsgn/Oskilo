@@ -104,7 +104,7 @@ def summary_rows(s: Session, lang: str, n: int | None = None, notes=None, units=
         (t("sum_mode"), t("mode_" + s.mode)),
     ]
     if s.port:
-        rows.append((t("sum_port"), f"{s.port} @ {s.baud} baud"))
+        rows.append((t("sum_port"), f"{s.port} @ {s.baud} baud" if s.baud else s.port))
     rows += [
         (t("sum_start"), s.started_at.strftime("%Y-%m-%d %H:%M:%S")),
         (t("sum_end"), (s.ended_at or _dt.datetime.now()).strftime("%Y-%m-%d %H:%M:%S")),
