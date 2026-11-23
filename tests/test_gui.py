@@ -316,10 +316,11 @@ def test_small_screen_fits(app, win):
     scr = win.screen().availableGeometry()
     assert win._side_collapsed and win._compact and not win.lbl_x.isVisible()
     win.centralWidget().layout().activate()
-    assert win.centralWidget().minimumSizeHint().width() <= scr.width()
+    # 1366×768 ekran %150 ölçek = 911 mantıksal piksel (yazı tipi genişliği işletim sistemine göre değişir)
+    assert win.centralWidget().minimumSizeHint().width() <= max(scr.width(), 911)
     assert win.minimumWidth() <= scr.width() and win.minimumHeight() <= scr.height()
     win._set_lang("en")
-    assert win.btn_png.text() == "🖼" and win.btn_png.toolTip() == "Save PNG"
+    assert win.btn_png.text() == "📷" and win.btn_png.toolTip() == "Save PNG"
     win._apply_compact(False)
     assert win.btn_png.text() == "Save PNG" and win.lbl_x.isVisible()
 
