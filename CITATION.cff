@@ -1,0 +1,25 @@
+cff-version: 1.2.0
+message: "Oskilo'yu çalışmanızda kullandıysanız lütfen kaynak gösterin. / If you use Oskilo in your work, please cite it."
+type: software
+title: "Oskilo: lossless serial and network data logger for STM32, Arduino and ESP32"
+abstract: >-
+  Desktop application that records data from microcontroller boards over a serial port or the
+  local network (TCP/UDP) without losing samples, with sequence-number and CRC checks, live charts,
+  FFT, alarms and Excel/CSV export.
+authors:
+  - given-names: "Mehmet Can"
+    family-names: "Dusgun"
+    alias: "mhmtcndsgn"
+repository-code: "https://github.com/mhmtcndsgn/Oskilo"
+url: "https://github.com/mhmtcndsgn/Oskilo"
+license: GPL-3.0-or-later
+version: 4.0.0
+date-released: "2026-11-23"
+keywords:
+  - data logger
+  - serial port
+  - STM32
+  - Arduino
+  - ESP32
+  - W5500
+  - oscilloscope

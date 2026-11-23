@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (c) 2026 Mehmet Can Dusgun (mhmtcndsgn) — Oskilo
 """Windows Güvenlik Duvarı: kartlardan gelen paketlere izin veren dar bir kural (yönetici izniyle).
 
 Kullanıcı "Oskilo'ya izin ver" düğmesine basınca tek bir UAC penceresi açılır ve PowerShell ile:

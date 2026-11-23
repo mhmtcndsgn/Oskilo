@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (c) 2026 Mehmet Can Dusgun (mhmtcndsgn) — Oskilo
 """Uygulama simgelerini assets/logo.svg'den üretir: icon.png, icon.ico (Windows), icon.icns (macOS).
 
     python packaging/make_icons.py

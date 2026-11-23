@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (c) 2026 Mehmet Can Dusgun (mhmtcndsgn) — Oskilo
 """Kılavuz görsellerini (assets/help/<dil>/*.png) ve README ekran görüntülerini (docs/*.png)
 uygulamanın kendisinden üretir.
 

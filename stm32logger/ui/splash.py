@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (c) 2026 Mehmet Can Dusgun (mhmtcndsgn) — Oskilo
 """Açılış ekranı: "Veri hattı" (Kart → Seri port → Doğrulama → Canlı grafik → Kayıt).
 
 Ağır modüller (numpy, pyqtgraph, ana pencere) yüklenmeden ÖNCE gösterilir; bu yüzden burada sadece
@@ -299,7 +301,7 @@ class Splash(QWidget):
             p.drawText(QPointF(32, 290), self.status)
             p.setPen(QColor(c["FAINT"]))
             p.setFont(mono_small)
-            cr = "© 2026 M. C. Dusgun"
+            cr = "IECIST  ·  © 2026 M. C. Dusgun"
             p.drawText(QPointF(W - 32 - QFontMetricsF(mono_small).horizontalAdvance(cr), 290), cr)
 
         # pencerenin altında ince ilerleme çizgisi

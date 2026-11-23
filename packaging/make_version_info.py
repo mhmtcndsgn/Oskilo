@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (c) 2026 Mehmet Can Dusgun (mhmtcndsgn) — Oskilo
 """Windows exe'sine ürün adı / sürüm / telif bilgisini gömmek için PyInstaller sürüm dosyası üretir.
 
 Kullanım (derleme öncesi):  python packaging/make_version_info.py packaging/version_info.txt
@@ -24,7 +26,8 @@ VSVersionInfo(
       StringStruct('FileDescription', 'Oskilo - serial data logger for STM32, Arduino, ESP32'),
       StringStruct('FileVersion', '{version}'),
       StringStruct('InternalName', 'Oskilo'),
-      StringStruct('LegalCopyright', 'Copyright (c) 2026 Mehmet Can. MIT License.'),
+      StringStruct('LegalCopyright', 'Copyright (c) 2026 Mehmet Can Dusgun. GPL-3.0-or-later.'),
+      StringStruct('LegalTrademarks', 'Oskilo is a trademark of Mehmet Can Dusgun.'),
       StringStruct('OriginalFilename', 'Oskilo.exe'),
       StringStruct('ProductName', 'Oskilo'),
       StringStruct('ProductVersion', '{version}')])]),

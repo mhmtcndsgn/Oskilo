@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (c) 2026 Mehmet Can Dusgun (mhmtcndsgn) — Oskilo
 """Uygulama içi kullanım kılavuzu (Türkçe / English).
 
 Her konu: (başlık, kısa özet, gövde). Gövdede:
@@ -165,7 +167,8 @@ GUIDE: dict[str, dict[str, tuple[str, str, str]]] = {
                 (9, "Grafiği gizle / göster", "<b>▾ Grafik</b>'e tıklayınca grafik küçülür, yeri terminale kalır; sadece terminalden okumak için. Gizliyken grafik hiç çizilmez, bilgisayar rahatlar; kayıt aynen sürer."),
                 (10, "Grafiği büyüt", "<b>⛶</b> (ya da grafiğe çift tıklama): <b>odak modu</b>, sol panel, kutular ve terminal gizlenir; üstte tek satır özet kalır. <b>F11</b>: tam ekran. <b>Esc</b>: geri dön."),
                 (11, "Ayrı pencere", "<b>⧉</b> grafiği ayrı bir pencereye taşır (ikinci monitör / projeksiyon). Pencereyi kapatınca grafik yerine döner."),
-                (12, "Yer açmak", "Sol üstteki <b>◧</b> (ya da <b>Ctrl+B</b>) sol paneli ince bir şeride indirir; bağlan düğmesi şeritte kalır. Terminalin sağındaki <b>▾</b> alt paneli sekme satırına indirir."))
+                (12, "Yer açmak", "Sol üstteki <b>◧</b> (ya da <b>Ctrl+B</b>) sol paneli ince bir şeride indirir; bağlan düğmesi şeritte kalır. Terminalin sağındaki <b>▾</b> alt paneli sekme satırına indirir."),
+                (13, "Filtreler", "Sol paneldeki <b>Filtreler</b>: hareketli ortalama, medyan (sıçrama giderici), alçak / yüksek geçiren ve çentik (50 Hz şebeke paraziti). Filtre sadece grafiği etkiler, ham veri değişmez; <b>Ham veriyi soluk göster</b> ile ikisini üst üste görürsünüz. İsterseniz <b>Dışa aktarırken süzülmüş sütunları da ekle</b> ile dosyaya ek sütunlar yazılır. Hz isteyen filtreler için örnekleme frekansı gerekir (canlı izlemede tahmin edilir)."))
             + TIP("🖱️", "Tekerlek: yakınlaştır · Sol tık sürükle: kaydır · Sağ tık: eksen seçenekleri. Grafik verinin dışına kaçmaz: "
                         "en fazla tüm veri sığana kadar uzaklaşır, sürükleyince verinin biraz ötesinde durur.")),
         "analysis": ("Analiz: FFT, imleç, istatistik, notlar", "Kaydı uygulamadan çıkmadan inceleyin.",
@@ -225,7 +228,10 @@ GUIDE: dict[str, dict[str, tuple[str, str, str]]] = {
             "<h3>Dosyaların sağlam olduğunu kontrol etmek</h3>"
             + S(("✓", "Herkese açık derleme", "Uygulama sadece GitHub'daki açık derleme sisteminde, bu repodaki koddan üretilir; her sürümde derleme kanıtı vardır."),
                 ("✓", "Dosyaları doğrula", "<b>? → Hakkında → Dosyaları doğrula</b>: klasördeki her dosyanın parmak izi (SHA-256) derlemeyle karşılaştırılır; değişen, eksik ya da sonradan eklenen dosyalar gösterilir."),
-                ("✓", "İndirmeyi doğrula", "En güçlü kontrol: zip'in parmak izi sürüm sayfasındaki <code>SHA256SUMS.txt</code> ile aynı olmalı (PowerShell: <code>Get-FileHash Oskilo_Windows.zip</code>)."))
+                ("✓", "İndirmeyi doğrula", "En güçlü kontrol: indirdiğiniz dosyanın parmak izi sürüm sayfasındaki <code>SHA256SUMS.txt</code> ile aynı olmalı (PowerShell: <code>Get-FileHash Oskilo_Setup.exe</code>)."))
+            + "<h3>Kurulum programı ya da zip</h3>"
+            "<p><b>Oskilo_Setup.exe</b> yönetici izni istemeden sadece sizin kullanıcınıza kurar, Başlat menüsüne ekler; <b>Ayarlar → Uygulamalar</b>'dan kaldırılır (kayıtlarınız silinmez). <b>Oskilo_Windows.zip</b> kurulumsuz, taşınabilir sürümdür. İkisi de uygulama içinden güncellenir.</p>"
+            "<p>Yavaş bilgisayarda <b>🎨 → Hafif mod</b>: grafik daha seyrek ve yumuşatmasız çizilir, kayıt etkilenmez.</p>"
             + "<h3>\"Bu dosyayı çalıştırmak istiyor musunuz?\" uyarısı</h3>"
             "<p>Windows bu uyarıyı internetten indirilen ve <b>dijital imzası olmayan</b> programlarda gösterir. Oskilo açık kaynaklıdır; uyarı sadece henüz imza sertifikası olmamasından kaynaklanır.</p>"
             + S(("1", "Mavi ekran", "<b>Ek bilgi → Yine de çalıştır</b>. Windows bu kararı hatırlar."),
@@ -366,7 +372,8 @@ GUIDE: dict[str, dict[str, tuple[str, str, str]]] = {
                 (9, "Hide / show chart", "Click <b>▾ Chart</b> to fold the chart away and give its space to the terminal, for reading the terminal only. While hidden the chart is not drawn at all, which saves CPU; recording continues."),
                 (10, "Enlarge the chart", "<b>⛶</b> (or double-click the chart): <b>focus mode</b> hides the left panel, the tiles and the terminal and keeps a one-line summary on top. <b>F11</b>: full screen. <b>Esc</b>: back."),
                 (11, "Separate window", "<b>⧉</b> moves the chart to its own window (second monitor / projector). Close that window to put the chart back."),
-                (12, "Make room", "<b>◧</b> at the top left (or <b>Ctrl+B</b>) folds the left panel into a thin strip that keeps the connect button. The <b>▾</b> right of the terminal tabs folds the bottom panel to its tab row."))
+                (12, "Make room", "<b>◧</b> at the top left (or <b>Ctrl+B</b>) folds the left panel into a thin strip that keeps the connect button. The <b>▾</b> right of the terminal tabs folds the bottom panel to its tab row."),
+                (13, "Filters", "<b>Filters</b> in the left panel: moving average, median (spike remover), low / high-pass and notch (50 Hz mains hum). Filters only affect the chart, raw data never changes; <b>Show raw data faintly</b> overlays both. <b>Also add filtered columns when exporting</b> writes extra columns to the file. Hz-based filters need the sample rate (estimated in live mode)."))
             + TIP("🖱️", "Wheel: zoom · Left-drag: pan · Right-click: axis options. The view never runs off the data: "
                         "you can zoom out until all data fits, and panning stops just past the data.")),
         "analysis": ("Analysis: FFT, cursors, statistics, notes", "Inspect the recording without leaving the app.",
@@ -426,7 +433,10 @@ GUIDE: dict[str, dict[str, tuple[str, str, str]]] = {
             "<h3>Checking that the files are intact</h3>"
             + S(("✓", "Public build", "The app is built only by the public GitHub build system from this repository; every release has build provenance."),
                 ("✓", "Verify files", "<b>? → About → Verify files</b> compares every file's fingerprint (SHA-256) with the build and lists modified, missing or added files."),
-                ("✓", "Verify the download", "Strongest check: the zip's fingerprint must match <code>SHA256SUMS.txt</code> on the release page (PowerShell: <code>Get-FileHash Oskilo_Windows.zip</code>)."))
+                ("✓", "Verify the download", "Strongest check: the downloaded file's fingerprint must match <code>SHA256SUMS.txt</code> on the release page (PowerShell: <code>Get-FileHash Oskilo_Setup.exe</code>)."))
+            + "<h3>Installer or zip</h3>"
+            "<p><b>Oskilo_Setup.exe</b> installs for your user only, without administrator rights, and adds a Start menu entry; remove it from <b>Settings → Apps</b> (your recordings are kept). <b>Oskilo_Windows.zip</b> is the portable version. Both update from inside the app.</p>"
+            "<p>On a slow computer use <b>🎨 → Light mode</b>: the chart is redrawn less often and without smoothing; recording is not affected.</p>"
             + "<h3>\"Do you want to run this file?\" warning</h3>"
             "<p>Windows shows this for programs downloaded from the internet that are <b>not digitally signed</b>. Oskilo is open source; the warning only appears because it has no signing certificate yet.</p>"
             + S(("1", "Blue screen", "<b>More info → Run anyway</b>. Windows remembers that choice."),

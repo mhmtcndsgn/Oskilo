@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 Mehmet Can Dusgun (mhmtcndsgn) — Oskilo örnek kart kodu
 /**
  * oskilo_net.h — STM32 (HAL) + W5500 için Oskilo ağ kütüphanesi
  *

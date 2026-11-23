@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 Mehmet Can Dusgun (mhmtcndsgn) — Oskilo örnek kart kodu
 /**
  * main_ornek.c — CubeMX'in oluşturduğu main.c'ye eklenecek parçalar (NUCLEO-WL55JC1 + W5500)
  *

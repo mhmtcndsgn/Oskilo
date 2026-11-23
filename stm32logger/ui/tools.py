@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (c) 2026 Mehmet Can Dusgun (mhmtcndsgn) — Oskilo
 """Küçük pencereler: kanal birimleri ve hızlı komut butonları."""
 from __future__ import annotations
 
@@ -225,8 +227,8 @@ class AlarmsDialog(QDialog):
     def _add_row(self, a: dict | None) -> None:
         if self.table.rowCount() >= analysis.MAX_ALARMS:
             return
-        a = a or {"on": True, "ch": self.channels[0] if self.channels else "", "op": ">", "value": 0.0,
-                  "hyst": 0.0, "beep": False, "cmd": "", "rec": False}
+        a = {"on": True, "ch": self.channels[0] if self.channels else "", "op": ">", "value": 0.0,
+             "hyst": 0.0, "beep": False, "cmd": "", "rec": False, **(a or {})}
         r = self.table.rowCount()
         self.table.insertRow(r)
         self.table.setItem(r, 0, self._check_item(a["on"]))

@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (c) 2026 Mehmet Can Dusgun (mhmtcndsgn) — Oskilo
 """Tema: koyu / açık zemin + renk (Oskilo, nötr gri ya da mavi, pembe, mor, yeşil, turuncu, turkuaz).
 
 Renk seçilince sadece butonlar değil bütün ekran (zemin, kartlar, grafik, terminal) o rengin
@@ -282,6 +284,7 @@ QPushButton#RailBtn {{ padding: 0; min-width: 34px; max-width: 34px; min-height:
     border-radius: 8px; font-size: 12pt; }}
 QPushButton#RailBtn[state="on"] {{ background: {RED}; border-color: {RED_HI}; color: white; }}
 QPushButton#RailBtn[state="off"] {{ background: {ACCENT}; border-color: {ACCENT_HI}; color: white; }}
+#Org {{ color: {MUTED}; font-size: 7pt; font-weight: 700; letter-spacing: 2px; background: transparent; }}
 #FocusBar {{ color: {MUTED}; font-size: 9pt; background: transparent; padding: 0 2px; }}
 #ToolsRow, #ChipRow, #NetBox, #NetManual, #DevBox, #PhLabel {{ background: transparent; }}
 """

@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (c) 2026 Mehmet Can Dusgun (mhmtcndsgn) — Oskilo
 """Ağ üzerinden veri: TCP ve UDP (ör. W5500, ESP32 Wi-Fi, ENC28J60).
 
 Bu sınıflar pyserial'ın Serial nesnesiyle aynı küçük arayüzü sunar (in_waiting, read, write,
@@ -322,22 +324,28 @@ def open_device(address: str, timeout: float = 2.5):
 def local_ipv4() -> list[str]:
     """Bu bilgisayarın IPv4 adresleri (kartın UDP ile göndereceği hedef için gösterilir)."""
     ips: list[str] = []
-    try:                                           # varsayılan çıkış adresi (paket gönderilmez)
-        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    # Her adres aralığı için işletim sisteminin seçeceği çıkış adresi (paket gönderilmez). Birden çok
+    # bağdaştırıcıyı (Wi-Fi + kabloyla doğrudan bağlı kart 169.254.x.x) böyle buluruz.
+    for probe in ("10.255.255.255", "192.168.255.255", "172.31.255.255", "169.254.255.255", "8.8.8.8"):
         try:
-            s.connect(("10.255.255.255", 1))
-            ips.append(s.getsockname()[0])
-        finally:
-            s.close()
-    except OSError:
-        pass
-    try:
-        for info in socket.getaddrinfo(socket.gethostname(), None, socket.AF_INET):
-            ips.append(info[4][0])
-    except OSError:
-        pass
+            s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            try:
+                s.connect((probe, 1))
+                ips.append(s.getsockname()[0])
+            finally:
+                s.close()
+        except OSError:
+            pass
+    if sys.platform == "win32":
+        # Windows'ta bütün bağdaştırıcılar hızlıca gelir. macOS / Linux'ta bilgisayar adının çözülmesi
+        # (mDNS) saniyelerce sürebilir: keşif döngüsünü bekletmesin diye orada sorulmaz.
+        try:
+            for info in socket.getaddrinfo(socket.gethostname(), None, socket.AF_INET):
+                ips.append(info[4][0])
+        except OSError:
+            pass
     out = []
     for ip in ips:
-        if ip and not ip.startswith("127.") and ip not in out:
+        if ip and ip != "0.0.0.0" and not ip.startswith("127.") and ip not in out:
             out.append(ip)
     return out

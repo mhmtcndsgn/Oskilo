@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (c) 2026 Mehmet Can Dusgun (mhmtcndsgn) — Oskilo
 """Daha önce kaydedilmiş dosyaları (yeni TXT/CSV/XLSX ya da eski sürüm .txt) açar."""
 from __future__ import annotations
 
@@ -8,7 +10,8 @@ import os
 
 from .i18n import STRINGS
 from .parser import parse_line, strip_old_timestamp, NUM_RE
-from .session import MAX_CHANNELS, Session, _dedupe, clean_note
+from .parser import MAX_LINE
+from .session import MAX_CHANNELS, Session, _as_int, _dedupe, clean_note
 
 MAX_FILE_BYTES = 4 * 1024 ** 3     # 4 GB üstü dosya açılmaz (bellek koruması)
 
@@ -23,18 +26,20 @@ def _meta_names() -> dict[str, str]:
     return out
 
 
-def _to_float(v):
+def _to_float(v, comma: bool = False):
     if v is None or v == "":
         return float("nan")
     if isinstance(v, (int, float)):
         f = float(v)
     else:
         v = str(v).strip()
+        if comma:                     # Türkçe Excel: "2,5" (noktalı virgülle ayrılmış dosya)
+            v = v.replace(",", ".")
         f = float(v) if NUM_RE.match(v) else float("nan")
     return f if math.isfinite(f) else float("nan")
 
 
-def _session_from_table(heads: list[str], rows, channel_prefix: str) -> Session | None:
+def _session_from_table(heads: list[str], rows, channel_prefix: str, comma: bool = False) -> Session | None:
     meta = _meta_names()
     roles = [meta.get(str(h).strip().lower()) for h in heads]
     if not any(roles):
@@ -58,15 +63,14 @@ def _session_from_table(heads: list[str], rows, channel_prefix: str) -> Session 
             continue
         r = list(r) + [None] * (len(heads) - len(r))
         for j, i in enumerate(ch_idx):
-            s.cols[j].append(_to_float(r[i]))
+            s.cols[j].append(_to_float(r[i], comma))
         if seq_i is not None:
-            v = _to_float(r[seq_i])
-            sv = int(v) if v == v else s.n
-            s.seq.append(s._check_seq(sv))
-        tv = _to_float(r[el_i]) if el_i is not None else float(s.n)
+            sv = _as_int(_to_float(r[seq_i], comma))
+            s.seq.append(s._check_seq(s.n if sv is None else sv))
+        tv = _to_float(r[el_i], comma) if el_i is not None else float(s.n)
         s.t_host.append(tv if tv == tv else float(s.n))
         if time_i is not None and len(times) < 2:
-            times.append(_to_float(r[time_i]))
+            times.append(_to_float(r[time_i], comma))
         if note_i is not None and r[note_i] not in (None, ""):
             note = clean_note(r[note_i])
             if note[:1] == "'" and note[1:2] in ("=", "+", "-", "@"):
@@ -124,8 +128,31 @@ def _load_xlsx(path: str, channel_prefix: str) -> Session:
 
 def _lines(path: str):
     """Dosyayı satır satır okur (tamamını belleğe almaz)."""
-    with open(path, "r", encoding="utf-8-sig", errors="replace") as f:
-        for ln in f:
+    limit = MAX_LINE * 4
+    enc = "utf-8-sig"
+    try:                              # Excel'in "CSV (noktalı virgül)" kaydı Türkçe Windows'ta cp1254 olur
+        with open(path, "rb") as fb:
+            head = fb.read(1 << 16)
+        try:
+            head.decode("utf-8")
+        except UnicodeDecodeError as e:
+            if e.start < len(head) - 4:         # sondaki yarım kalmış çok baytlı karakter değilse
+                enc = "cp1254"
+    except OSError:
+        pass
+    with open(path, "r", encoding=enc, errors="replace", newline="") as f:
+        while True:
+            ln = f.readline(limit)
+            if not ln:
+                return
+            if len(ln) >= limit and not ln.endswith(("\n", "\r")):
+                # aşırı uzun satır (satır sonu olmayan bozuk dosya): atla, belleği şişirmesin
+                while True:
+                    rest = f.readline(limit)
+                    if not rest or rest.endswith(("\n", "\r")):
+                        break
+                yield ""
+                continue
             yield ln.rstrip("\r\n")
 
 
@@ -174,11 +201,11 @@ def _load_text(path: str, channel_prefix: str) -> Session:
     body = (ln for ln in _lines(path) if ln.strip() and not ln.lstrip().startswith("#"))
     first = next(body, None)
     if first is not None:
-        delim = "\t" if "\t" in first else ("," if "," in first else None)
+        delim = "\t" if "\t" in first else (";" if ";" in first else ("," if "," in first else None))
         if delim:
             heads = [h.strip() for h in _split(first, delim)]
             rows = ([c.strip() for c in _split(ln, delim)] for ln in body)
-            s = _session_from_table(heads, rows, channel_prefix)
+            s = _session_from_table(heads, rows, channel_prefix, comma=delim == ";")
             if s is not None:
                 return s
     # Genel çözümleyici (eski sürüm kayıtları, ham yedekler, düz loglar)

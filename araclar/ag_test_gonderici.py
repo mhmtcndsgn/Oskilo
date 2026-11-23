@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (c) 2026 Mehmet Can Dusgun (mhmtcndsgn) — Oskilo
 """Kart olmadan ağ bağlantısını denemek için sahte Oskilo kartı (W5500 / ESP32 kartı gibi davranır).
 
     python araclar/ag_test_gonderici.py                 # sahte kart: Oskilo onu kendiliğinden bulur
@@ -25,6 +27,14 @@ from stm32logger.engine import DemoSerial  # noqa: E402
 
 CHUNK = 1400          # UDP paket boyutu (Ethernet'e sığar)
 SUB_TIMEOUT = 5.0
+
+
+def print(*args, **kw):  # noqa: A001  Türkçe karakter yazamayan konsolda (cp1252) çökmesin
+    import builtins
+    try:
+        builtins.print(*args, **kw)
+    except UnicodeEncodeError:
+        builtins.print(*(str(a).encode("ascii", "replace").decode() for a in args), **kw)
 
 
 def _local_ip_for(peer: str) -> str:

@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (c) 2026 Mehmet Can Dusgun (mhmtcndsgn) — Oskilo
 """Bir kayıt oturumunun (bir deney / bir aktarım) verilerini tutar.
 
 Veriler kanal başına `array('d')` dizilerinde tutulur; bu hem bellekte
@@ -14,6 +16,7 @@ from __future__ import annotations
 import datetime as _dt
 import math
 import threading
+import weakref
 from array import array
 from bisect import bisect_left
 from dataclasses import dataclass
@@ -24,6 +27,7 @@ NAN = float("nan")
 FAST_SEQ_ROWS = 3      # ilk 3 satır ardışıksa hemen karar ver
 SLOW_SEQ_ROWS = 5      # değilse 5 satıra bak (bağlanınca yarım gelen ilk satır vb.)
 LOCK_COLS_AFTER = 10   # bu kadar düzgün satırdan sonra sütun sayısı sabitlenir
+RELOCK_COLS_AFTER = 50  # sabitlendikten sonra bu kadar art arda farklı (aynı) uzunluk: yeni sayı kabul
 MAX_CHANNELS = 64      # bundan fazla kanal açılmaz (bozuk "isim:değer" akışı belleği şişirmesin)
 _INT_LIMIT = 9.0e18
 
@@ -129,6 +133,12 @@ class Session:
         # tetik arabelleği zinciri (motor bölünce/koparsa doldurur): sonraki oturum (güçlü) ve önceki (zayıf)
         self.next_session: Session | None = None
         self.prev_ref = None
+        # Uzun kayıt parçalara bölününce (segment) grafik kesintisiz sürsün diye: önceki parça (zayıf
+        # bağ, bellekte tutmaz), zincirin başlangıç zamanı / sıra no'su ve önceki parçalardaki satır sayısı
+        self.prev_segment = None
+        self.chain_t0: float | None = None
+        self.chain_seq0: int | None = None
+        self.row_offset = 0
 
     def add_note(self, text: str, t: float, row: int | None = None) -> int:
         """Not ekler; notun bağlandığı satırı döndürür (verilmezse o anki son satır)."""
@@ -157,13 +167,23 @@ class Session:
         self.ephemeral = old.ephemeral
         if self.seq_mode == "auto" and old.has_seq is not None:
             self.has_seq = old.has_seq
-        self._ncols = old._ncols
-        self._ncols_seen, self._ncols_last = old._ncols_seen, old._ncols_last
         for name in old.channels:
             self._ensure(name)
         if keep_seq:
+            # Aynı akış devam ediyor: sabitlenmiş sütun sayısı ve sıra kontrolü kaldığı yerden sürer.
+            # (Koptuysa kart yeniden programlanmış olabilir: sütun sayısı yeniden öğrenilir.)
+            self._ncols = old._ncols
+            self._ncols_seen, self._ncols_last = old._ncols_seen, old._ncols_last
             self._last_seq = old._last_seq
             self._seq_off = old._seq_off
+            self.prev_segment = weakref.ref(old)
+            self.chain_t0 = old.chain_t0 if old.chain_t0 is not None else (old.t_host[0] if len(old.t_host) else None)
+            self.chain_seq0 = old.chain_seq0 if old.chain_seq0 is not None else (old.seq[0] if len(old.seq) else None)
+            self.row_offset = old.row_offset + old.n
+            if old._tent is not None:          # bölme anındaki şüpheli değer: kararı yeni parça verir
+                good, sus, _ = old._tent
+                old._tent = None
+                self._tent = (good, sus, -1)
 
     # ------------------------------------------------------------------ ekleme
     def add(self, t: float, p: ParsedLine) -> None:
@@ -265,7 +285,18 @@ class Session:
             # Sütun sayısı sabitlendikten sonra farklı uzunluktaki satır = bozuk (birleşmiş/yarım satır)
             if self._ncols is not None and len(vals) != self._ncols:
                 self.bad_lines += 1
-                return
+                # Kart başka sütun sayısıyla göndermeye başladıysa (yeniden programlandı / sıfırlandı)
+                # aynı uzunlukta art arda gelen satırlardan sonra yeni sayı kabul edilir.
+                if len(vals) == self._relock_len:
+                    self._relock_cnt += 1
+                else:
+                    self._relock_len, self._relock_cnt = len(vals), 1
+                if self._relock_cnt < RELOCK_COLS_AFTER:
+                    return
+                self._ncols = len(vals)
+                self._relock_cnt = 0
+            else:
+                self._relock_cnt = 0
             hdr = self.header
             if self.has_seq and vals:
                 raw = _as_int(vals[0])
@@ -307,22 +338,29 @@ class Session:
         self.n += 1
 
     _ncols_last = 0
+    _relock_len = -1
+    _relock_cnt = 0
 
     def _check_seq(self, raw: int) -> int:
         """Sıra numarasını kontrol eder; saklanacak (taşma düzeltilmiş) değeri döndürür."""
         s = raw + self._seq_off
         last = self._last_seq
-        if (not self.seq32 and last is not None and s < last and last - s > 32768
-                and last - self._seq_off <= 65535 and raw < 32768):
-            self._seq_off += 65536            # 16 bit sayaç 65535 -> 0
-            s = raw + self._seq_off
+        if last is not None and s < last and 0 <= raw:
+            # Sayaç taşması (16 bit: 65535 -> 0, ikili çerçevede 32 bit). Sadece taşma sınırına yakın
+            # bir değerden küçük bir değere atlayınca: kart ortada sıfırlanınca taşma sanılmasın.
+            mod, win = (1 << 32, 1 << 20) if self.seq32 else (1 << 16, 4096)
+            last_raw = last - self._seq_off
+            if 0 <= last_raw < mod and raw < mod and (raw - last_raw) % mod <= win:
+                self._seq_off += mod
+                s = raw + self._seq_off
 
         if self._tent is not None:
             good, sus, idx = self._tent
             self._tent = None
             if s == good + 2 and sus != good + 1:
                 # şüpheli değer aslında good+1'di, sadece bozuk geldi -> düzelt
-                self.seq[idx] = good + 1
+                if idx >= 0:
+                    self.seq[idx] = good + 1
                 self.fixed_seq += 1
                 self._last_seq = s
                 return s
@@ -368,7 +406,8 @@ class Session:
 
     def finish(self, reason: str) -> None:
         self.flush_pending()
-        self._resolve_tentative()
+        if reason != "segment":                # bölmede şüpheli değeri yeni parça çözer (continue_from)
+            self._resolve_tentative()
         self.ended_at = _dt.datetime.now()
         self.finish_reason = reason
 

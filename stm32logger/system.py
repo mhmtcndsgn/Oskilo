@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (c) 2026 Mehmet Can Dusgun (mhmtcndsgn) — Oskilo
 """İşletim sistemiyle ilgili küçük yardımcılar.
 
 * Kurulum bütünlüğü: derleme sırasında her dosyanın SHA-256 parmak izi
@@ -25,6 +27,7 @@ MANIFEST = "manifest.sha256"
 
 # ---------------------------------------------------------------- ayarlar
 _MIGRATED = "_migrated_from_old"
+_UNINSTALLER = re.compile(r"unins\d{3}\.(exe|dat|msg)", re.IGNORECASE)
 
 
 def app_settings():
@@ -172,6 +175,8 @@ def verify_install(root: str | None = None, manifest: str | None = None) -> dict
             p = os.path.join(dirpath, f)
             rel = os.path.relpath(p, root).replace(os.sep, "/")
             if rel == man_rel or f.endswith(ZONE):   # (Linux testlerinde akış ayrı dosya görünür)
+                continue
+            if _UNINSTALLER.fullmatch(rel):          # kurulum programının kaldırıcısı (Oskilo_Setup.exe ekler)
                 continue
             seen.add(rel)
             if rel not in known:

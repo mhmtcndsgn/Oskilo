@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (c) 2026 Mehmet Can Dusgun (mhmtcndsgn) — Oskilo
 """Analiz yardımcıları (arayüzden bağımsız, test edilebilir).
 
 * Birim dönüşümü: gerçek değer = ham × çarpan + ofset   (ör. ADC → Volt)
@@ -258,3 +260,181 @@ def alarm_scan(y, op: str, thr: float, hyst: float, armed: bool, max_hits: int =
         if lh >= 0 or lb >= 0:
             armed = bool(lb > lh)
     return hits, armed
+
+
+# ================================================================== FİLTRELER
+# Grafikte gürültüyü süzmek için. Hepsi "sıfır faz"lıdır (sinyal sağa/sola kaymaz) ve sadece
+# görüntüyü / isteğe bağlı ek sütunları etkiler; kaydedilen ham veri hiç değişmez.
+FILTERS = ("off", "mavg", "median", "lowpass", "highpass", "notch")
+FILTER_DEFAULTS = {"mavg": 9.0, "median": 5.0, "lowpass": 10.0, "highpass": 0.5, "notch": 50.0}
+MAX_TAPS = 65537                 # FFT ile süzüldüğü için uzun katsayı dizisi de hızlıdır
+MEDIAN_MAX = 101                 # medyan penceresi (daha büyüğü zayıf bilgisayarda grafiği yavaşlatır)
+
+
+def filter_needs_fs(kind: str) -> bool:
+    """Bu filtre örnekleme frekansı (Hz) bilmeden çalışamaz mı?"""
+    return kind in ("lowpass", "highpass", "notch")
+
+
+def _window_n(param: float, lo: int, hi: int, odd: bool = False) -> int:
+    n = int(round(param)) if np.isfinite(param) else lo
+    n = max(lo, min(hi, n))
+    if odd and n % 2 == 0:
+        n += 1
+    return n
+
+
+def _sinc_lowpass(fc: float, fs: float, taps: int) -> np.ndarray:
+    m = np.arange(taps) - (taps - 1) / 2
+    h = np.sinc(2 * fc / fs * m) * np.blackman(taps)
+    return h / h.sum()
+
+
+def _fir_taps(width_hz: float, fs: float) -> int:
+    """Geçiş bandı genişliğine göre katsayı sayısı (Blackman: ~5.5·fs/genişlik), tek sayı, sınırlı."""
+    n = int(5.5 * fs / max(width_hz, 1e-9))
+    n = max(11, min(MAX_TAPS, n))
+    return n | 1
+
+
+def _fast_len(n: int) -> int:
+    """n'den küçük olmayan, FFT için hızlı uzunluk (2^a·3^b)."""
+    best = 1 << max(0, (n - 1).bit_length())
+    p3 = 1
+    while p3 < best:
+        p2 = p3
+        while p2 < n:
+            p2 *= 2
+        best = min(best, p2)
+        p3 *= 3
+    return best
+
+
+def _conv_valid(x: np.ndarray, h: np.ndarray) -> np.ndarray:
+    """np.convolve(x, h, "valid") ile aynı; uzun katsayı dizisinde FFT ile (çok daha hızlı)."""
+    if len(h) <= 64 or len(x) * len(h) <= 4_000_000:
+        return np.convolve(x, h, mode="valid")
+    n = len(x) + len(h) - 1
+    nf = _fast_len(n)
+    out = np.fft.irfft(np.fft.rfft(x, nf) * np.fft.rfft(h, nf), nf)
+    return out[len(h) - 1:len(x)]
+
+
+def _zero_phase(y: np.ndarray, h: np.ndarray) -> np.ndarray:
+    """Simetrik FIR ile kaymasız süzme; kenarlar yansıtılarak uzatılır (uçlarda düşme olmasın).
+
+    Katsayı dizisinden çok kısa parçada (kayıplar arasında kalan birkaç satır) uzatılan kısım
+    çoğunlukla sabit uç değeridir; onun katkısı katsayıların toplamıyla doğrudan hesaplanır.
+    Sonuç aynıdır, ama kayıplı veride yüzlerce kısa parça çok daha hızlı süzülür.
+    """
+    k = len(h) // 2
+    L = len(y)
+    if L < 2:
+        return y * float(h.sum())
+    pad = min(k, L - 1)
+    if 2 * L > k:
+        yp = np.pad(y, (pad, pad), mode="reflect")
+        if pad < k:                               # kısa parça: kalan kısmı uç değerle doldur
+            yp = np.pad(yp, (k - pad, k - pad), mode="edge")
+        return _conv_valid(yp, h)
+    # L ≤ k/2: pad = L-1; ortadaki (yansıtılmış) kısım + iki sabit uç
+    mid = np.pad(y, (pad, pad), mode="reflect")
+    M = len(mid)
+    g = h[k - pad - (L - 1):k - pad + M]
+    out = _conv_valid(g, mid[::-1])[::-1]
+    c = np.concatenate(([0.0], np.cumsum(h)))
+    j = np.arange(L)
+    out = out + mid[0] * c[k - pad - j] + mid[-1] * (c[-1] - c[k + L + pad - j])
+    return out
+
+
+def _fir_kernel(kind: str, param: float, fs: float):
+    """Alçak/yüksek geçiren ve çentik için katsayılar (bir kez hesaplanır). Uygulanamazsa None."""
+    nyq = fs / 2
+    if fs <= 0:
+        return None
+    if kind in ("lowpass", "highpass"):
+        fc = float(param)
+        if not (0 < fc < nyq):
+            return None
+        return _sinc_lowpass(fc, fs, _fir_taps(fc * 0.5, fs))
+    if kind == "notch":
+        f0 = float(param)
+        bw = max(2.0, f0 * 0.1)                   # 50 Hz → 45–55 Hz bastırılır
+        lo, hi = f0 - bw / 2, f0 + bw / 2
+        if not (0 < lo and hi < nyq):
+            return None
+        taps = _fir_taps(bw / 2, fs)
+        return _sinc_lowpass(hi, fs, taps) - _sinc_lowpass(lo, fs, taps)
+    return None
+
+
+def _filter_segment(y: np.ndarray, kind: str, param: float, h) -> np.ndarray:
+    if kind == "mavg":
+        n = min(_window_n(param, 1, 2001), len(y))
+        if n <= 1:
+            return y.copy()
+        # kenarda pencere daralır (sadece var olan değerlerin ortalaması); toplam ile hızlı
+        y0 = float(y[len(y) // 2])                # büyük sayılarda toplam hassasiyeti kaybolmasın
+        c = np.concatenate(([0.0], np.cumsum(y - y0)))
+        i = np.arange(len(y))
+        lo = np.maximum(i - n // 2, 0)
+        hi = np.minimum(i - n // 2 + n, len(y))
+        return (c[hi] - c[lo]) / (hi - lo) + y0
+    if kind == "median":
+        n = _window_n(param, 3, MEDIAN_MAX, odd=True)
+        if len(y) < 3:
+            return y.copy()
+        half = n // 2
+        yp = np.pad(y, (half, half), mode="edge")
+        out = np.empty_like(y)
+        step = 100_000                           # büyük kayıtta bellek patlamasın diye parça parça
+        for a in range(0, len(y), step):
+            b = min(len(y), a + step)
+            win = np.lib.stride_tricks.sliding_window_view(yp[a:b + 2 * half], n)
+            out[a:b] = np.median(win, axis=1)
+        return out
+    if h is None:
+        return y.copy()
+    if kind == "lowpass":
+        return _zero_phase(y, h)
+    return y - _zero_phase(y, h)                   # yüksek geçiren / çentik: süzüleni çıkar
+
+
+def apply_filter(y, kind: str, param: float, fs: float = 0.0) -> np.ndarray:
+    """Seçilen filtreyi uygular. Boşluklar (NaN: kayıp satır) korunur; her kesintisiz parça ayrı
+    süzülür, böylece kayıp bölge komşu değerlere bulaşmaz. "off" ya da uygulanamazsa veri aynen döner."""
+    y = np.asarray(y, dtype=np.float64)
+    if kind not in FILTERS or kind == "off" or not len(y):
+        return y
+    h = _fir_kernel(kind, param, fs) if filter_needs_fs(kind) else None
+    if filter_needs_fs(kind) and h is None:
+        return y
+    fin = np.isfinite(y)
+    if fin.all():
+        return _filter_segment(y, kind, param, h)
+    out = np.full_like(y, np.nan)
+    idx = np.flatnonzero(fin)
+    if not len(idx):
+        return out
+    cut = np.flatnonzero(np.diff(idx) > 1)
+    starts = np.r_[idx[0], idx[cut + 1]]
+    ends = np.r_[idx[cut], idx[-1]] + 1
+    for a, b in zip(starts.tolist(), ends.tolist()):
+        out[a:b] = _filter_segment(y[a:b], kind, param, h)
+    return out
+
+
+def filter_ready(kind: str, param: float, fs: float) -> bool:
+    """Filtre bu ayarlarla gerçekten uygulanabiliyor mu? (Hz isteyen filtrede fs ve Nyquist kontrolü)"""
+    if kind == "off" or kind not in FILTERS:
+        return False
+    if not filter_needs_fs(kind):
+        return True
+    if fs <= 0:
+        return False
+    if kind == "notch":
+        bw = max(2.0, param * 0.1)
+        # dar bant çok yüksek örnekleme hızında çok uzun katsayı ister; sığmazsa çentik işe yaramaz
+        return param - bw / 2 > 0 and param + bw / 2 < fs / 2 and 5.5 * fs / (bw / 2) <= MAX_TAPS
+    return 0 < param < fs / 2

@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (c) 2026 Mehmet Can Dusgun (mhmtcndsgn) — Oskilo
 """Ağdaki Oskilo kartlarını kendiliğinden bulma (protokol: docs/ag_protokolu.md).
 
 Oskilo her ağ bağdaştırıcısından yayın adresine "OSKILO? 1" sorusunu gönderir; kartlar kimlik, ad,

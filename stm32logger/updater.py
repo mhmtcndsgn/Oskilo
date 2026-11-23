@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (c) 2026 Mehmet Can Dusgun (mhmtcndsgn) — Oskilo
 """Uygulama içi güncelleme.
 
 Akış (Windows paketi):
@@ -430,6 +432,10 @@ def _read(path: Path, default: str = "") -> str:
 
 
 # ================================================================ hazırlık (eski sürüm, arka planda)
+_CLEANUP_DONE = threading.Event()
+_CLEANUP_DONE.set()
+
+
 def prepare_windows(rel: dict, root: Path | None = None, progress=None, cancel=None) -> Path:
     """Yeni sürümü indirir, doğrular, açar. Döndürür: yardımcı olarak çalıştırılacak yeni exe."""
     root = Path(root or install_dir())
@@ -439,6 +445,7 @@ def prepare_windows(rel: dict, root: Path | None = None, progress=None, cancel=N
     if not asset:
         raise UpdateError("upd_e_asset", name=ASSET_WIN)
     staging = root / NEW_DIR
+    _CLEANUP_DONE.wait(120)               # açılıştaki temizlik sürüyorsa aynı klasöre karışmasın
     _fresh_dir(staging, root)
     try:
         probe = staging / "yazma_testi.tmp"
@@ -1329,6 +1336,31 @@ def _cleanup(root: Path, keep_staging: bool) -> None:
     _clean_trash(root)
 
 
+UNINSTALL_KEY = r"Software\Microsoft\Windows\CurrentVersion\Uninstall\{C7A79E34-102C-58D8-A91C-73C48CFE1405}_is1"
+
+
+def sync_uninstall_entry(root: Path, version: str = __version__) -> bool:
+    """Kurulum programıyla kurulduysa, uygulama içi güncellemeden sonra Windows'un "Uygulamalar"
+    listesindeki sürüm numarası da güncellensin. Kurulum yoksa / başka klasördeyse dokunulmaz."""
+    if sys.platform != "win32":
+        return False
+    try:
+        import winreg
+
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, UNINSTALL_KEY, 0,
+                            winreg.KEY_QUERY_VALUE | winreg.KEY_SET_VALUE) as k:
+            loc, _ = winreg.QueryValueEx(k, "InstallLocation")
+            if _canon(str(loc).rstrip("\\/")) != _canon(root):
+                return False
+            cur, _ = winreg.QueryValueEx(k, "DisplayVersion")
+            if cur == version:
+                return False
+            winreg.SetValueEx(k, "DisplayVersion", 0, winreg.REG_SZ, version)
+            return True
+    except OSError:
+        return False
+
+
 def startup(argv: list[str], root: Path | None = None, current: str = __version__) -> dict:
     """Ana pencere görününce çağrılır. Güncellemenin sonucunu bildirir, artıkları temizler.
 
@@ -1337,6 +1369,8 @@ def startup(argv: list[str], root: Path | None = None, current: str = __version_
     root = Path(root or install_dir())
     out = {"updated_from": None, "failed": None, "pending": None}
     staging = root / NEW_DIR
+    if getattr(sys, "frozen", False):
+        sync_uninstall_entry(root, current)
     if "--updated-from" in argv:
         out["updated_from"] = _arg(argv, "--updated-from", "?")
         try:
@@ -1361,5 +1395,17 @@ def startup(argv: list[str], root: Path | None = None, current: str = __version_
         out["updated_from"] = _read(staging / APPLIED, "?") or "?"
     pend = pending(root, current) if out["failed"] is None else None
     out["pending"] = pend
-    _cleanup(root, keep_staging=pend is not None)
+    # Eski sürümün klasörünü silmek (binlerce dosya, Windows Defender) birkaç saniye sürebilir:
+    # pencere donmasın diye arka planda. Yeni indirme başlamadan önce bitmesi beklenir.
+    _CLEANUP_DONE.clear()
+
+    def bg():
+        try:
+            _cleanup(root, keep_staging=pend is not None)
+        finally:
+            _CLEANUP_DONE.set()
+
+    th = threading.Thread(target=bg, name="update-cleanup", daemon=True)
+    th.start()
+    th.join(0.3)                          # küçükse hemen biter
     return out

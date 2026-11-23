@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (c) 2026 Mehmet Can Dusgun (mhmtcndsgn) — Oskilo
 """Derlenen Windows klasöründeki her dosyanın SHA-256 parmak izini yazar.
 
     python packaging/make_manifest.py dist/Oskilo

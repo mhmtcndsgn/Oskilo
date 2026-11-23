@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (c) 2026 Mehmet Can Dusgun (mhmtcndsgn) — Oskilo
 """Güncelleme yardımcısının küçük ilerleme penceresi.
 
 Eski Oskilo kapandıktan yeni sürümün açılış ekranı görünene kadar ekranda bir şey olsun diye
