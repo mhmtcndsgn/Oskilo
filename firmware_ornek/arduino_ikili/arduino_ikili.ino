@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 Mehmet Can Dusgun (mhmtcndsgn) — Oskilo örnek kart kodu
 /*
  * Oskilo — Arduino / ESP32 ikili (CRC) örneği
  * --------------------------------------------

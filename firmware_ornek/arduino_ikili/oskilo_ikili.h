@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 Mehmet Can Dusgun (mhmtcndsgn) — Oskilo örnek kart kodu
 /*
  * Oskilo ikili çerçeve — gönderme kodu (tek dosya, kütüphane gerekmez)
  * =====================================================================
