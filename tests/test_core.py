@@ -231,7 +231,8 @@ def test_unblock_only_known_files_and_verify():
         assert system.is_blocked(dll) and system.is_blocked(evil)
         assert os.path.exists(exe) and os.path.exists(dll)     # asıl dosyalar duruyor
         os.remove(evil)
-        os.remove(evil + system.ZONE)
+        if os.path.exists(evil + system.ZONE):               # Windows'ta akış dosyayla birlikte silinir
+            os.remove(evil + system.ZONE)
         os.remove(os.path.join(d, "_internal", "Qt6Core.dll"))
         v = system.verify_install(d, man)
         assert v["missing"] == ["_internal/Qt6Core.dll"]
