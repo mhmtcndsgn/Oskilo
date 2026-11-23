@@ -214,10 +214,13 @@ def test_unblock_only_known_files_and_verify():
         assert system.write_manifest(d, man) == 2
         v = system.verify_install(d, man)
         assert v["ok"] and v["checked"] == 2 and not v["extra"]
+        for name in ("unins000.exe", "unins000.dat"):            # kurulum programının kaldırıcısı sayılmaz
+            open(os.path.join(d, name), "w").write("x")
+        assert not system.verify_install(d, man)["extra"]
 
         evil = os.path.join(d, "_internal", "evil.dll")       # sonradan klasöre eklenen dosya
         open(evil, "w").write("x")
-        open(dll, "a").write("değişti")                       # değiştirilmiş dosya
+        open(dll, "a", encoding="utf-8").write("değişti")                       # değiştirilmiş dosya
         for p in (exe, dll, evil, man):
             # Linux'ta ":" dosya adında geçerli; Windows'taki alternatif akışı taklit eder
             open(p + system.ZONE, "w").write("[ZoneTransfer]\nZoneId=3\n")
@@ -231,7 +234,8 @@ def test_unblock_only_known_files_and_verify():
         assert system.is_blocked(dll) and system.is_blocked(evil)
         assert os.path.exists(exe) and os.path.exists(dll)     # asıl dosyalar duruyor
         os.remove(evil)
-        os.remove(evil + system.ZONE)
+        if os.path.exists(evil + system.ZONE):               # Windows'ta akış dosyayla birlikte silinir
+            os.remove(evil + system.ZONE)
         os.remove(os.path.join(d, "_internal", "Qt6Core.dll"))
         v = system.verify_install(d, man)
         assert v["missing"] == ["_internal/Qt6Core.dll"]
@@ -285,7 +289,7 @@ def test_atomic_export_keeps_old_file_on_error():
     orig = exporter._export_delim
 
     def boom(*a, **k):
-        open(a[1], "w").write("yarım")
+        open(a[1], "w", encoding="utf-8").write("yarım")
         raise OSError("disk full")
 
     exporter._export_delim = boom
