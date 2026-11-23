@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (c) 2026 Mehmet Can Dusgun (mhmtcndsgn) — Oskilo
 """Kart olmadan ağ bağlantısını denemek için sahte Oskilo kartı (W5500 / ESP32 kartı gibi davranır).
 
     python araclar/ag_test_gonderici.py                 # sahte kart: Oskilo onu kendiliğinden bulur
