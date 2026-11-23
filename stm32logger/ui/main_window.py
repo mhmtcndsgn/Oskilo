@@ -2878,7 +2878,7 @@ class MainWindow(QMainWindow):
     # Dar pencerede (1366×768 ekran %125–150 ölçek) grafik araç satırı sadece simgelere iner,
     # böylece pencere ekrana sığar. Yazılar araç ipucunda kalır.
     _COMPACT = (("btn_cursor", "cursor_btn", "📏"), ("btn_fft", "fft_btn", "📊"), ("btn_note", "note_btn", "📝"),
-                ("btn_fit", "fit", "⤢"), ("btn_png", "save_png", "🖼"))
+                ("btn_fit", "fit", "⤢"), ("btn_png", "save_png", "📷"))
 
     def _apply_compact(self, on: bool, force: bool = False) -> None:
         if on == self._compact and not force:
