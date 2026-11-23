@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (c) 2026 Mehmet Can Dusgun (mhmtcndsgn) — Oskilo
 """Ana pencere."""
 from __future__ import annotations
 
@@ -15,6 +17,7 @@ import threading
 import weakref
 import time
 from bisect import bisect_left, bisect_right
+from array import array
 from pathlib import Path
 
 import numpy as np
@@ -291,14 +294,17 @@ class MainWindow(QMainWindow):
         icon = ASSETS / "icon.png"
         if icon.exists():
             self.setWindowIcon(QIcon(str(icon)))
-        self.resize(1360, 860)
-        self.setMinimumSize(960, 620)
+        self._fit_to_screen(initial=True)
 
         self.disc = netdiscovery.shared()
         self._known_devs: set[str] = set()
         self._port_user_picked = False
         self._dev_applied = None
         self._side_collapsed = False
+        self._light = False                 # hafif mod (yavaş bilgisayar)
+        self._loop_lag = 0.0                # olay döngüsü gecikmesi (sn, yumuşatılmış)
+        self._tick_t = 0.0
+        self._compact = False               # dar pencere: grafik araçları sadece simge
         self._bottom_collapsed = False
         self._focus = False
         self._focus_full = False
@@ -322,6 +328,7 @@ class MainWindow(QMainWindow):
         self.port_timer.start()
         QTimer.singleShot(300, self.disc.start)          # ağdaki kartları aramaya başla
         self._last_autosave = self._last_disk = self._last_retry = time.monotonic()
+        self._autosave_cost = 0.0           # son otomatik kaydın süresi (sn)
         self._disk_low = False
         self.long_timer = QTimer(self, interval=15000, timeout=self._periodic)
         self.long_timer.start()
@@ -417,9 +424,16 @@ class MainWindow(QMainWindow):
         lay.addWidget(logo)
         self.lbl_title_a = QLabel()
         self.lbl_title_a.setObjectName("TitleMain")
+        self.lbl_iecist = QLabel("IECIST")             # "Oskilo"nun altında küçük yazı
+        self.lbl_iecist.setObjectName("Org")
+        name_box = QVBoxLayout()
+        name_box.setContentsMargins(0, 0, 0, 0)
+        name_box.setSpacing(0)
+        name_box.addWidget(self.lbl_title_a)
+        name_box.addWidget(self.lbl_iecist)
         self.lbl_title = QLabel()
         self.lbl_title.setObjectName("Tagline")
-        lay.addWidget(self.lbl_title_a)
+        lay.addLayout(name_box)
         lay.addWidget(self.lbl_title)
         lay.addStretch(1)
         self.lbl_lang = QLabel()
@@ -485,6 +499,10 @@ class MainWindow(QMainWindow):
             self._accent_group.addAction(a)
             self.theme_menu.addAction(a)
             self.act_accents[k] = a
+        self.theme_menu.addSeparator()
+        self.act_light = QAction(self.theme_menu, checkable=True)
+        self.act_light.toggled.connect(self._set_light)
+        self.theme_menu.addAction(self.act_light)
         self.btn_theme.setMenu(self.theme_menu)
         lay.addWidget(self.btn_theme)
         lay.addSpacing(4)
@@ -616,6 +634,7 @@ class MainWindow(QMainWindow):
         self.fs_spin.setDecimals(2)
         self.fs_spin.setSuffix(" Hz")
         self.fs_spin.setButtonSymbols(QDoubleSpinBox.NoButtons)
+        self.fs_spin.valueChanged.connect(lambda _: hasattr(self, "filt_cb") and self._sync_filter_hint())
         c.add(self.fs_spin)
         self.lbl_seq = c.label()
         self.seq_cb = QComboBox()
@@ -638,6 +657,32 @@ class MainWindow(QMainWindow):
         self.btn_alarms.clicked.connect(self._edit_alarms)
         c.add(self.btn_alarms)
         col.addWidget(c)
+
+        # --- Filtreler ---
+        c = self.card_filter = Card()
+        self.lbl_filter = c.label()
+        self.filt_cb = QComboBox()
+        for k in analysis.FILTERS:
+            self.filt_cb.addItem(k, k)
+        self.filt_cb.currentIndexChanged.connect(self._on_filter_kind)
+        c.add(self.filt_cb)
+        self.lbl_filt_param = c.label()
+        self.filt_spin = QDoubleSpinBox()
+        self.filt_spin.setDecimals(2)
+        self.filt_spin.setRange(0.01, 1_000_000)
+        self.filt_spin.valueChanged.connect(self._on_filter_param)
+        c.add(self.filt_spin)
+        self.lbl_filt_hint = hint_label()
+        c.add(self.lbl_filt_hint)
+        self.chk_filt_raw = QCheckBox()
+        self.chk_filt_raw.toggled.connect(lambda _: self._invalidate_plot())
+        c.add(self.chk_filt_raw)
+        self.chk_filt_export = QCheckBox()
+        self.chk_filt_export.toggled.connect(lambda _: self._refresh_summaries())
+        c.add(self.chk_filt_export)
+        col.addWidget(c)
+        self._filt_params = dict(analysis.FILTER_DEFAULTS)    # her filtrenin son ayarı ayrı hatırlanır
+        self._raw_curves: dict = {}
 
         # --- Kayıt ---
         c = self.card_save = Card()
@@ -710,7 +755,7 @@ class MainWindow(QMainWindow):
         c.add_persistent(row)                       # katlıyken de "Şimdi kaydet" görünür
         col.addWidget(c)
         col.addStretch(1)
-        for card in (self.card_conn, self.card_data, self.card_save):
+        for card in (self.card_conn, self.card_data, self.card_filter, self.card_save):
             card.toggled.connect(self._save_collapsed)
 
         scroll.setWidget(inner)
@@ -1059,6 +1104,8 @@ class MainWindow(QMainWindow):
             a.setText(t("tm_" + m))
         for k, a in self.act_accents.items():
             a.setText(t("ac_" + k))
+        self.act_light.setText(t("light_mode"))
+        self.act_light.setToolTip(t("light_mode_tip"))
         self._sync_theme_menu()
         if getattr(self, "_help_dlg", None) is not None:
             self._help_dlg.set_lang(self.lang)
@@ -1078,6 +1125,14 @@ class MainWindow(QMainWindow):
         self._style_connect_button()
 
         self.card_data.title.setText(t("card_data"))
+        self.card_filter.title.setText(t("card_filter"))
+        self.lbl_filter.setText(t("filt_type"))
+        for k in analysis.FILTERS:
+            self.filt_cb.setItemText(self.filt_cb.findData(k), t("filt_" + k))
+        self.chk_filt_raw.setText(t("filt_show_raw"))
+        self.chk_filt_export.setText(t("filt_export"))
+        self.chk_filt_export.setToolTip(t("filt_export_tip"))
+        self._sync_filter_hint()
         self.lbl_fs.setText(t("fs"))
         self.fs_spin.setSpecialValueText(t("fs_unknown"))
         self.fs_spin.setToolTip(t("fs_tip"))
@@ -1162,6 +1217,7 @@ class MainWindow(QMainWindow):
         self.btn_units.setText(t("units_btn"))
         self.btn_units.setToolTip(t("units_help"))
         self._style_alarm_button()
+        self._apply_compact(self._compact, force=True)
         self.fft_plot.getPlotItem().setLabel("left", t("fft_y"))
         self._rebuild_quick()
         self._update_readout()
@@ -1226,7 +1282,7 @@ class MainWindow(QMainWindow):
             ln.label.setColor(color)
             ln.label.fill = pg.mkBrush(th.BG_PANEL)
         for i, c in enumerate(getattr(self, "_fft_curves", {}).values()):
-            c.setPen(pg.mkPen(th.SERIES[i % len(th.SERIES)], width=1.4))
+            c.setPen(pg.mkPen(th.SERIES[i % len(th.SERIES)], width=1))
         for ln in getattr(self, "_note_items", {}).values():
             ln.label.fill = pg.mkBrush(th.BG_PANEL)
             ln.label.update()
@@ -1240,6 +1296,17 @@ class MainWindow(QMainWindow):
         if self._accent in self.act_accents:
             self.act_accents[self._accent].setChecked(True)
         self.btn_theme.setIcon(_swatch(th.ACCENT_TXT, 14))
+
+    def _set_light(self, on: bool) -> None:
+        """Hafif mod (yavaş bilgisayar): yumuşatma kapalı, grafik ve istatistik en fazla saniyede bir."""
+        on = bool(on)
+        self.settings.setValue("light_mode", on)
+        if on == self._light:
+            return
+        self._light = on
+        pg.setConfigOptions(antialias=not on)
+        self._curve_owner = None               # çizgiler yeni ayarla yeniden kurulsun
+        self._plot_sig = None
 
     def _set_theme(self, mode: str | None = None, accent: str | None = None) -> None:
         if mode is not None:
@@ -1256,7 +1323,10 @@ class MainWindow(QMainWindow):
                 style_title_bar(w)
         self._style_plot()
         for i, c in enumerate(self._curves.values()):   # yakınlaştırma korunur, sadece renkler değişir
-            c.setPen(pg.mkPen(th.SERIES[i % len(th.SERIES)], width=1.6))
+            c.setPen(pg.mkPen(th.SERIES[i % len(th.SERIES)], width=1))
+        for c in self._raw_curves.values():
+            self.plot.removeItem(c)
+        self._raw_curves.clear()
         self._chip_sig = None
         self._plot_sig = None
         self._set_status_dot(self.engine is not None and not self.engine.reconnecting)
@@ -1302,9 +1372,23 @@ class MainWindow(QMainWindow):
         self.seq_cb.setCurrentIndex(max(0, self.seq_cb.findData(sv("seq", "auto"))))
         self.idle_spin.setValue(sv("idle", 1.0, float))
         self.seg_fmt.set_value(sv("fmt", "xlsx") if sv("fmt", "xlsx") in FORMATS else "xlsx")
+        try:
+            fp = json.loads(sv("filt_params", "{}"))
+            if isinstance(fp, dict):
+                for k, v in fp.items():
+                    if k in analysis.FILTER_DEFAULTS and isinstance(v, (int, float)) and v > 0:
+                        self._filt_params[k] = float(v)
+        except (TypeError, ValueError):
+            pass
+        self.chk_filt_raw.setChecked(sv("filt_raw", True, bool))
+        self.chk_filt_export.setChecked(sv("filt_export", False, bool))
+        fk = sv("filt_kind", "off")
+        self.filt_cb.setCurrentIndex(max(0, self.filt_cb.findData(fk if fk in analysis.FILTERS else "off")))
+        self._on_filter_kind()
         self.folder_edit.setText(sv("folder", "") or self._default_folder())
         self.prefix_edit.setText(sv("prefix", "") or self.t("default_prefix"))
         self.chk_auto.setChecked(sv("autosave", True, bool))
+        self.act_light.setChecked(sv("light_mode", False, bool))
         i = self.every_cb.findData(sv("autosave_every", 5, int))
         self.every_cb.setCurrentIndex(i if i >= 0 else AUTOSAVE_MIN.index(5))
         self.every_cb.setEnabled(self.chk_auto.isChecked())
@@ -1334,6 +1418,7 @@ class MainWindow(QMainWindow):
             geo = self.settings.value("geometry")
             if geo is not None:
                 self.restoreGeometry(geo)
+                self._fit_to_screen()
             sp = self.settings.value("splitter")
             if sp is not None:
                 self.splitter.restoreState(sp)
@@ -1350,13 +1435,32 @@ class MainWindow(QMainWindow):
         for key, card in self._cards().items():
             card.set_collapsed(bool(col.get(key, False)))
         self._set_plot_collapsed(bool(col.get("plot", False)), save=False)
-        self._set_sidebar_collapsed(bool(col.get("side", False)), save=False)
+        if "side" in col:
+            self._set_sidebar_collapsed(bool(col["side"]), save=False)
+        else:                                       # ilk açılış: dar ekranda (ör. %150 ölçek) sol panel şeritte
+            scr = QGuiApplication.primaryScreen()
+            self._set_sidebar_collapsed(scr is not None and scr.availableGeometry().width() < 1100, save=False)
         if "bottom" in col:
             self._set_bottom_collapsed(bool(col["bottom"]), save=False)
         else:                                       # ilk açılış: alçak ekranda (ör. 1366×768) alt panel katlı
             scr = QGuiApplication.primaryScreen()
             if scr is not None and scr.availableGeometry().height() < 800:
                 self._set_bottom_collapsed(True, save=False)
+
+    def _fit_to_screen(self, initial: bool = False) -> None:
+        """Küçük ekranda (1366×768, %125–150 ölçek) pencere ekrandan taşmasın."""
+        scr = self.screen() or QGuiApplication.primaryScreen()
+        if scr is None:
+            if initial:
+                self.resize(1360, 860)
+            return
+        av = scr.availableGeometry()
+        aw, ah = max(640, av.width() - 16), max(480, av.height() - 40)   # 40: başlık çubuğu
+        self.setMinimumSize(min(960, aw), min(620, ah))
+        if initial:
+            self.resize(min(1360, aw), min(860, ah))
+        elif not self.isMaximized() and (self.width() > aw or self.height() > ah):
+            self.resize(min(self.width(), aw), min(self.height(), ah))
 
     def _reset_settings(self) -> None:
         t = self.t
@@ -1380,7 +1484,7 @@ class MainWindow(QMainWindow):
         self._theme_mode, self._accent = "system", th.DEFAULT_ACCENT
         self._apply_theme(save=False)
         self._load_settings()
-        self.resize(1360, 860)
+        self._fit_to_screen(initial=True)
         self._set_plot_collapsed(False, save=False)
         self.splitter.setSizes([480, 260])
         self._set_lang("tr" if self.lang_cb.currentIndex() == 0 else "en")
@@ -1402,6 +1506,10 @@ class MainWindow(QMainWindow):
         s.setValue("seq", self.seq_cb.currentData())
         s.setValue("idle", self.idle_spin.value())
         s.setValue("fmt", self.seg_fmt.value())
+        s.setValue("filt_kind", self.filt_cb.currentData() or "off")
+        s.setValue("filt_params", json.dumps(self._filt_params))
+        s.setValue("filt_raw", "true" if self.chk_filt_raw.isChecked() else "false")
+        s.setValue("filt_export", "true" if self.chk_filt_export.isChecked() else "false")
         s.setValue("folder", self.folder_edit.text())
         s.setValue("prefix", self.prefix_edit.text())
         s.setValue("autosave", "true" if self.chk_auto.isChecked() else "false")
@@ -1909,6 +2017,11 @@ class MainWindow(QMainWindow):
 
     # ================================================================ DÖNGÜ
     def _tick(self) -> None:
+        now_p = time.perf_counter()
+        if self._tick_t:                        # 50 ms'lik zamanlayıcı ne kadar gecikiyor (yavaş bilgisayar)
+            lag = max(0.0, now_p - self._tick_t - 0.05)
+            self._loop_lag = 0.8 * self._loop_lag + 0.2 * min(lag, 5.0)
+        self._tick_t = now_p
         self._drain_exports()
         try:
             while True:
@@ -1938,7 +2051,8 @@ class MainWindow(QMainWindow):
                     elif kind == "raw_part":
                         self._log(self.t("msg_raw_part", path=msg), "muted")
                     elif kind == "error" and msg.startswith("raw:"):
-                        self._log(self.t("msg_raw_err", err=msg[4:]), "error")
+                        err = self.t("raw_lowdisk") if msg == "raw:lowdisk" else msg[4:]
+                        self._log(self.t("msg_raw_err", err=err), "error")
                     elif kind == "error":
                         self._log(msg, "error")
             except queue.Empty:
@@ -2184,6 +2298,21 @@ class MainWindow(QMainWindow):
             k = "sample"
         return k
 
+    def _set_gap_regions(self, regions: list) -> None:
+        items = self._gap_items
+        while len(items) > len(regions):
+            self.plot.removeItem(items.pop())
+        for i, reg in enumerate(regions):
+            if i < len(items):
+                if items[i].getRegion() != reg:
+                    items[i].setRegion(reg)
+            else:
+                it = pg.LinearRegionItem(reg, movable=False, brush=pg.mkBrush(248, 81, 73, 45),
+                                         pen=pg.mkPen(248, 81, 73, 110))
+                it.setZValue(-10)
+                self.plot.addItem(it)
+                items.append(it)
+
     def _update_plot(self) -> None:
         s = self.view
         if s is None:
@@ -2195,7 +2324,9 @@ class MainWindow(QMainWindow):
         win = self.win_cb.currentData() if (s.mode == "live" and s.ended_at is None) else 0
         # Büyük veri alınırken grafiği çizim süresine göre seyrelt (arayüz akıcı kalsın)
         if s.ended_at is None and self._plot_sig is not None and self._plot_sig[0] == id(s):
-            if time.perf_counter() - self._plot_t < max(0.2, 4 * self._plot_dur):
+            # (çizimin ekrana basılma süresi _plot_dur'a girmez; olay döngüsünün gecikmesi onu yansıtır)
+            gap = max(1.0 if self._light else 0.2, 4 * self._plot_dur, 3 * self._loop_lag)
+            if time.perf_counter() - self._plot_t < gap:
                 return
         t_start = time.perf_counter()
         with s.lock:
@@ -2208,29 +2339,55 @@ class MainWindow(QMainWindow):
                 start = bisect_left(s.t_host, s.t_host[n - 1] - win)
             names = list(s.channels)
             ys = [col[start:n] for col in s.cols]
-            th0 = s.t_host[0] if len(s.t_host) else 0.0
+            th0 = s.chain_t0 if s.chain_t0 is not None else (s.t_host[0] if len(s.t_host) else 0.0)
             th_ = s.t_host[start:n] if len(s.t_host) >= n else None
             notes = list(s.notes)
             seq = s.seq[start:n] if (s.has_seq and len(s.seq) >= n) else None
-            seq0 = s.seq[0] if seq is not None and len(s.seq) else 0
+            seq0 = s.chain_seq0 if s.chain_seq0 is not None else (s.seq[0] if seq is not None and len(s.seq) else 0)
             fs = s.sample_rate
+            row0 = s.row_offset
+            t_last = s.t_host[n - 1] if (n and len(s.t_host) >= n) else None
         self._plot_sig = sig
+        # Uzun kayıt parçalara bölündüyse (1M satırda bir) pencerenin başı önceki parçadan gelir:
+        # grafik her bölmede boşalıp sıfırdan başlamasın.
+        pre = 0
+        prev = s.prev_segment() if (win and start == 0 and s.prev_segment is not None) else None
+        if prev is not None and t_last is not None and th_ is not None:
+            with prev.lock:
+                pn = prev.n
+                if pn and len(prev.t_host) >= pn and len(prev.cols) <= len(names):
+                    pa = bisect_left(prev.t_host, t_last - win, 0, pn)
+                    p_seq = prev.seq[pa:pn] if (prev.has_seq and len(prev.seq) >= pn) else None
+                    if pa < pn and (seq is None) == (p_seq is None):
+                        pre = pn - pa
+                        ys = [(prev.cols[i][pa:pn] if i < len(prev.cols) else array("d", [math.nan]) * pre) + y
+                              for i, y in enumerate(ys)]
+                        th_ = prev.t_host[pa:pn] + th_
+                        if seq is not None:
+                            seq = p_seq + seq
+        start -= pre
 
         if kind == "host":
             x = np.frombuffer(th_, dtype=np.float64) - th0 if th_ is not None and len(th_) else np.empty(0)
             xlabel = self.t("x_host")
         elif kind == "time":
-            base = (np.frombuffer(seq, dtype=np.int64) - seq0) if seq is not None else np.arange(start, n)
+            base = (np.frombuffer(seq, dtype=np.int64) - seq0) if seq is not None else np.arange(start, n) + row0
             x = base / fs
             xlabel = self.t("x_time")
         else:
-            x = np.frombuffer(seq, dtype=np.int64).astype(np.float64) if seq is not None else np.arange(start, n, dtype=np.float64)
+            x = np.frombuffer(seq, dtype=np.int64).astype(np.float64) if seq is not None else np.arange(start, n, dtype=np.float64) + row0
             xlabel = self.t("x_sample")
 
+        if self._curve_owner is not s and self._curve_owner is not None and s.prev_segment is not None \
+                and s.prev_segment() is self._curve_owner:
+            self._curve_owner = s                  # aynı kaydın sonraki parçası: çizgiler ve yakınlaştırma kalır
         if self._curve_owner is not s:
             for c in self._curves.values():
                 self.plot.removeItem(c)
             self._curves.clear()
+            for c in self._raw_curves.values():
+                self.plot.removeItem(c)
+            self._raw_curves.clear()
             self.legend.clear()
             self._chip_sig = None
             self._curve_owner = s
@@ -2246,25 +2403,25 @@ class MainWindow(QMainWindow):
             t_est = np.frombuffer(th_, dtype=np.float64)
         fs_eff = fs if fs > 0 else (analysis.estimate_fs(t_est) if t_est is not None else 0.0)
         # Kayıp bölgeleri: çizgiyi kopar ve kırmızı ile işaretle (ara değer uydurma)
-        for r in self._gap_items:
-            self.plot.removeItem(r)
-        self._gap_items = []
+        # En yeni 100 kayıp işaretlenir; işaretler yeniden kullanılır (her çizimde silip yaratılmaz)
         gap_idx = None
+        regions = []
         if seq is not None and len(seq) > 1:
             sq = np.frombuffer(seq, dtype=np.int64)
             gap_idx = np.nonzero(np.diff(sq) > 1)[0] + 1
-            for gi in gap_idx[:100]:
-                if gi < len(x):
-                    reg = pg.LinearRegionItem((float(x[gi - 1]), float(x[gi])), movable=False,
-                                              brush=pg.mkBrush(248, 81, 73, 45), pen=pg.mkPen(248, 81, 73, 110))
-                    reg.setZValue(-10)
-                    self.plot.addItem(reg)
-                    self._gap_items.append(reg)
+            regions = [(float(x[gi - 1]), float(x[gi])) for gi in gap_idx[-100:] if gi < len(x)]
+        self._set_gap_regions(regions)
+        if gap_idx is not None:
             if len(gap_idx):
                 x = x.astype(np.float64)
                 x = np.insert(x, gap_idx, x[gap_idx - 1])   # x sıralı kalır, y'de NaN ile çizgi kopar
 
-        conv_ys, labels = [], []
+        conv_ys, labels, shown_ys = [], [], []
+        fkind = self.filt_cb.currentData() or "off"
+        fparam = self.filt_spin.value()
+        filt_on = analysis.filter_ready(fkind, fparam, fs_eff)
+        show_raw = filt_on and self.chk_filt_raw.isChecked()
+        self._filt_fs = fs_eff
         for i, name in enumerate(names):
             u = analysis.unit_of(self._units, name) if not s.imported else None   # açılan dosya zaten dönüştürülmüş
             lbl = analysis.label(name, u)
@@ -2272,20 +2429,34 @@ class MainWindow(QMainWindow):
             c = self._curves.get(name)
             if c is None:
                 color = th.SERIES[i % len(th.SERIES)]
-                c = self.plot.plot(pen=pg.mkPen(color, width=1.6), name=html.escape(lbl), connect="finite")
+                c = self.plot.plot(pen=pg.mkPen(color, width=1), name=html.escape(lbl), connect="finite")
                 c.setDownsampling(auto=True, method="peak")
                 c.setClipToView(True)
                 self._curves[name] = c
             y = np.frombuffer(ys[i], dtype=np.float64) if len(ys[i]) else np.empty(0)
             y = analysis.convert(y, u)
-            conv_ys.append(y)
+            conv_ys.append(y)            # FFT / istatistik ham (süzülmemiş) veriyle çalışır
             if gap_idx is not None and len(gap_idx) and len(y) == len(x) - len(gap_idx):
                 y = np.insert(y, gap_idx, np.nan)
             m = min(len(x), len(y))
-            c.setData(x[:m], y[:m])
+            if filt_on:
+                yf = analysis.apply_filter(y[:m], fkind, fparam, fs_eff)
+                shown_ys.append(yf)
+                c.setData(x[:m], yf)
+                rc = self._raw_curve(name, i)
+                rc.setData(x[:m], y[:m])
+                rc.setVisible(show_raw and name not in self._hidden_ch)
+                if show_raw:
+                    shown_ys.append(y[:m])
+            else:
+                shown_ys.append(y[:m])
+                c.setData(x[:m], y[:m])
+                if name in self._raw_curves:
+                    self._raw_curves[name].setData([], [])
         self._sync_chips(names, labels)
         thr = self._draw_alarm_lines(names)
-        vis_ys = [y for name, y in zip(names, conv_ys) if name not in self._hidden_ch] or conv_ys
+        per = 2 if show_raw else 1                        # her kanal için çizilen dizi sayısı
+        vis_ys = [y for k, y in enumerate(shown_ys) if names[k // per] not in self._hidden_ch] or shown_ys
         self._apply_plot_limits(x_raw, vis_ys, thr)
         self._last_plot = {"x": x_raw, "ys": conv_ys, "names": labels, "kind": kind, "fs": fs_eff, "t": t_est,
                            "unit_x": "s" if kind in ("time", "host") else ""}
@@ -2592,7 +2763,7 @@ class MainWindow(QMainWindow):
 
     # ================================================================ KATLANABİLİR PANELLER
     def _cards(self) -> dict:
-        return {"conn": self.card_conn, "data": self.card_data, "save": self.card_save}
+        return {"conn": self.card_conn, "data": self.card_data, "filter": self.card_filter, "save": self.card_save}
 
     def _collapsed_state(self) -> dict:
         d = {k: c.is_collapsed() for k, c in self._cards().items()}
@@ -2665,6 +2836,14 @@ class MainWindow(QMainWindow):
         fmt_name = {"xlsx": "Excel", "csv": "CSV", "txt": "TXT"}[self.seg_fmt.value()]
         trig = (" · " + t("trig_short")) if self.chk_trig.isChecked() and self.seg_mode.value() == "live" else ""
         self.card_save.set_summary(f"{fmt_name} · {auto}{trig}")
+        if hasattr(self, "filt_cb"):
+            kind, param = self._filter_spec()
+            if kind == "off":
+                self.card_filter.set_summary(t("filt_off"))
+            else:
+                val = f"{param:g}" + ("" if kind in ("mavg", "median") else " Hz")
+                exp = " · " + t("filt_export_short") if self.chk_filt_export.isChecked() else ""
+                self.card_filter.set_summary(f"{t('filt_' + kind)} · {val}{exp}")
 
     @staticmethod
     def _bounds(x, ys):
@@ -2692,8 +2871,49 @@ class MainWindow(QMainWindow):
             self.sidebar.setVisible(not on)
             self.side_rail.setVisible(on)
         self.btn_side.setToolTip(self.t("side_show" if on else "side_hide") + "  (Ctrl+B)")
+        self._update_compact()
         if save:
             self._save_collapsed()
+
+    # Dar pencerede (1366×768 ekran %125–150 ölçek) grafik araç satırı sadece simgelere iner,
+    # böylece pencere ekrana sığar. Yazılar araç ipucunda kalır.
+    _COMPACT = (("btn_cursor", "cursor_btn", "📏"), ("btn_fft", "fft_btn", "📊"), ("btn_note", "note_btn", "📝"),
+                ("btn_fit", "fit", "⤢"), ("btn_png", "save_png", "📷"))
+
+    def _apply_compact(self, on: bool, force: bool = False) -> None:
+        if on == self._compact and not force:
+            return
+        self._compact = on
+        t = self.t
+        for attr, key, icon in self._COMPACT:
+            b = getattr(self, attr, None)
+            if b is None:
+                return
+            b.setText(icon if on else t(key))
+        self.btn_fit.setToolTip(t("fit") if on else "")
+        self.btn_png.setToolTip(t("save_png") if on else "")
+        self.btn_cursor.setToolTip(t("cursor_btn") + " — " + t("cursor_tip") if on else t("cursor_tip"))
+        self.btn_fft.setToolTip(t("fft_btn") + " — " + t("fft_tip") if on else t("fft_tip"))
+        self.btn_note.setToolTip((t("note_btn") + " — " if on else "") + t("note_tip") + "  (Ctrl+M)")
+        self.lbl_x.setVisible(not on)
+        self.lbl_win.setVisible(not on)
+
+    def _update_compact(self) -> None:
+        if not hasattr(self, "btn_png"):
+            return
+        side = 0 if (self._side_collapsed or self._focus) else self.sidebar.width()
+        w = self.width()
+        scr = self.screen()
+        if scr is not None:                  # pencere ekrandan geniş kalmışsa (en küçük boyu yüzünden) ekrana göre
+            w = min(w, scr.availableGeometry().width())
+        was = self._compact
+        self._apply_compact(w - side - 60 < 940)
+        if self._compact and not was and scr is not None and self.width() > scr.availableGeometry().width():
+            QTimer.singleShot(0, self._fit_to_screen)
+
+    def resizeEvent(self, ev) -> None:  # noqa: N802
+        super().resizeEvent(ev)
+        self._update_compact()
 
     def _set_bottom_collapsed(self, on: bool, save: bool = True) -> None:
         """Terminal / İstatistik / Notlar paneli sekme satırına iner; boşalan yeri grafik alır."""
@@ -2730,6 +2950,78 @@ class MainWindow(QMainWindow):
         if save:
             self._save_collapsed()
 
+    # ================================================================ FİLTRELER
+    def _raw_curve(self, name: str, i: int):
+        """Filtre açıkken ham verinin soluk çizgisi (süzülmüşün arkasında)."""
+        c = self._raw_curves.get(name)
+        if c is None:
+            col = QColor(th.SERIES[i % len(th.SERIES)])
+            col.setAlpha(70)
+            c = self.plot.plot(pen=pg.mkPen(col, width=1.0), connect="finite")
+            c.setDownsampling(auto=True, method="peak")
+            c.setClipToView(True)
+            c.setZValue(-1)
+            self._raw_curves[name] = c
+        return c
+
+    def _filter_spec(self) -> tuple[str, float]:
+        return (self.filt_cb.currentData() or "off"), self.filt_spin.value()
+
+    def _on_filter_kind(self, *_) -> None:
+        kind = self.filt_cb.currentData() or "off"
+        on = kind != "off"
+        self.filt_spin.blockSignals(True)
+        if kind in ("mavg", "median"):
+            self.filt_spin.setDecimals(0)
+            self.filt_spin.setRange(3 if kind == "median" else 2, analysis.MEDIAN_MAX if kind == "median" else 2001)
+            self.filt_spin.setSingleStep(2 if kind == "median" else 1)
+            self.filt_spin.setSuffix("")
+        else:
+            self.filt_spin.setDecimals(2)
+            self.filt_spin.setRange(0.01, 1_000_000)
+            self.filt_spin.setSingleStep(1)
+            self.filt_spin.setSuffix(" Hz")
+        if on:
+            self.filt_spin.setValue(self._filt_params.get(kind, analysis.FILTER_DEFAULTS.get(kind, 1.0)))
+        self.filt_spin.blockSignals(False)
+        for w in (self.lbl_filt_param, self.filt_spin, self.chk_filt_raw, self.chk_filt_export):
+            w.setVisible(on)
+        self._sync_filter_hint()
+        self._invalidate_plot()
+
+    def _on_filter_param(self, v: float) -> None:
+        kind = self.filt_cb.currentData() or "off"
+        if kind != "off":
+            self._filt_params[kind] = v
+        self._sync_filter_hint()
+        self._invalidate_plot()
+
+    def _sync_filter_hint(self) -> None:
+        t = self.t
+        kind, param = self._filter_spec()
+        self.lbl_filt_param.setText(t("filt_param_" + ("n" if kind in ("mavg", "median") else "hz")))
+        hint = t("filt_hint_" + kind)
+        fs = self.fs_spin.value() or getattr(self, "_filt_fs", 0.0)
+        if analysis.filter_needs_fs(kind):
+            if fs <= 0:
+                hint += "\n" + t("filt_need_fs")
+            elif not analysis.filter_ready(kind, param, fs):
+                hint += "\n" + t("filt_bad_hz", nyq=f"{fs / 2:.1f}")
+        self.lbl_filt_hint.setText(hint)
+        self._refresh_summaries()
+
+    def _filter_for_export(self, s) -> dict | None:
+        """Dışa aktarırken eklenecek süzülmüş sütunların ayarı (kapalıysa None)."""
+        kind, param = self._filter_spec()
+        if kind == "off" or not self.chk_filt_export.isChecked():
+            return None
+        fs = s.sample_rate
+        if fs <= 0 and s.mode == "live" and len(s.t_host) > 2:
+            fs = analysis.estimate_fs(np.frombuffer(s.t_host, dtype=np.float64)[: s.n])
+        if not analysis.filter_ready(kind, param, fs):
+            return None
+        return {"kind": kind, "param": param, "fs": fs, "label": self.t("filt_col_suffix")}
+
     # ================================================================ GRAFİK: kanal satırı
     def _sync_chips(self, names: list, labels: list) -> None:
         """Grafiğin üstündeki kanal düğmeleri: renk + ad; tıklayınca kanal gizlenir / görünür."""
@@ -2765,6 +3057,9 @@ class MainWindow(QMainWindow):
             c = curves.get(name)
             if c is not None:
                 c.setVisible(on)
+        rc = self._raw_curves.get(name)
+        if rc is not None:
+            rc.setVisible(on and self.chk_filt_raw.isChecked())
         self._plot_sig = None                    # eksen sınırları görünen kanallara göre yeniden
         self._update_plot()
 
@@ -2933,7 +3228,8 @@ class MainWindow(QMainWindow):
         finally:
             self._analysis_dur = time.perf_counter() - t0
             # kaydırırken çok sık hesaplamasın: süre uzunsa bekleme de uzar
-            self._analysis_timer.setInterval(int(min(1500, max(150, 2000 * self._analysis_dur))))
+            self._analysis_timer.setInterval(int(min(1500, max(1000 if self._light else 150,
+                                                                2000 * self._analysis_dur))))
 
     def _do_analysis(self) -> None:
         if self._plot_collapsed:                  # istatistik grafikteki görünen aralıktan hesaplanır
@@ -2962,7 +3258,7 @@ class MainWindow(QMainWindow):
                 self._fft_curves = {}
                 for i, name in enumerate(lp["names"]):
                     c = self._fft_curves[name] = self.fft_plot.plot(
-                        pen=pg.mkPen(th.SERIES[i % len(th.SERIES)], width=1.4), name=html.escape(name))
+                        pen=pg.mkPen(th.SERIES[i % len(th.SERIES)], width=1), name=html.escape(name))
                     c.setDownsampling(auto=True, method="peak")
                     c.setClipToView(True)
                     c.setVisible(name not in self._hidden_ch)
@@ -3391,7 +3687,9 @@ class MainWindow(QMainWindow):
         minutes = self.every_cb.currentData() or 0
         if not (self.chk_auto.isChecked() and minutes and self._conn_info[2] == "live"):
             return
-        if now - self._last_autosave < minutes * 60:
+        # Yazma uzun sürüyorsa (zayıf bilgisayar, milyonlarca satır Excel) aralık uzar: işlemcinin
+        # en fazla ~%10'u otomatik kayda gitsin, kayıt ve arayüz akıcı kalsın.
+        if now - self._last_autosave < max(minutes * 60, 10 * self._autosave_cost):
             return
         self._last_autosave = now
         cur = eng.current
@@ -3403,13 +3701,17 @@ class MainWindow(QMainWindow):
         # Bu işe özel kopya (aynı anda başka bir kayıt farklı birimle yazıyor olabilir).
         # Açılan dosyanın değerleri zaten dönüştürülmüş olabilir: tekrar dönüştürülmez.
         units = {} if s.imported else {k: dict(v) for k, v in self._units.items()}
+        filt = self._filter_for_export(s)
         self._reserved.add(os.path.normcase(path))
         s.exporting += 1
 
         def job():
             info = {}
+            t0 = time.monotonic()
             try:
-                export_session(s, path, fmt, lang, info=info, units=units)
+                export_session(s, path, fmt, lang, info=info, units=units, filt=filt)
+                if mode == "periodic":
+                    self._autosave_cost = time.monotonic() - t0
                 self._export_q.put(("ok", (path, info.get("rows", 0), info.get("notes", 0), mode, fmt), s, path))
             except Exception as e:  # noqa: BLE001
                 self._export_q.put(("err", (f"{os.path.basename(path)}: {e}", mode, fmt), s, path))
@@ -3527,23 +3829,40 @@ class MainWindow(QMainWindow):
         path, _ = QFileDialog.getOpenFileName(self, self.t("open_title"), folder, self.t("file_filter"))
         if not path:
             return
+        if getattr(self, "_loading_file", False):
+            return
+        # Büyük dosya (milyonlarca satır) uzun sürebilir: arka planda açılır, pencere donmaz
+        self._loading_file = True
         QApplication.setOverrideCursor(Qt.WaitCursor)
-        try:
-            s = load_file(path, channel_prefix=self.t("channel_prefix"))
-        except Exception as e:  # noqa: BLE001
+        self.statusBar().showMessage(self.t("msg_loading", path=os.path.basename(path)))
+        prefix = self.t("channel_prefix")
+
+        def ok(s):
+            self._loading_file = False
             QApplication.restoreOverrideCursor()
-            msg = {"no-data": self.t("msg_nodata"), "too-big": self.t("file_too_big")}.get(str(e), str(e))
+            self.statusBar().clearMessage()
+            if self.engine is not None:            # bu arada bağlanıldı: canlı kayıt öncelikli
+                return
+            self.view = s
+            self._plot_sig = None
+            self.banner.hide()
+            if s.sample_rate > 0 and self.fs_spin.value() == 0:
+                self.fs_spin.setValue(s.sample_rate)
+            self._log(self.t("msg_loaded", path=path, n=_fmt_int(s.n)), "ok")
+            self._update_stats(force=True)
+
+        def err(e):
+            self._loading_file = False
+            QApplication.restoreOverrideCursor()
+            self.statusBar().clearMessage()
+            if isinstance(e, MemoryError):
+                msg = self.t("file_too_big")
+            else:
+                msg = {"no-data": self.t("msg_nodata"), "too-big": self.t("file_too_big")}.get(str(e), str(e))
             self._log(self.t("msg_load_err", err=msg), "error")
             self._msg("warn", self.t("err_title"), self.t("msg_load_err", err=msg))
-            return
-        QApplication.restoreOverrideCursor()
-        self.view = s
-        self._plot_sig = None
-        self.banner.hide()
-        if s.sample_rate > 0 and self.fs_spin.value() == 0:
-            self.fs_spin.setValue(s.sample_rate)
-        self._log(self.t("msg_loaded", path=path, n=_fmt_int(s.n)), "ok")
-        self._update_stats(force=True)
+
+        self._run_bg(lambda: load_file(path, channel_prefix=prefix), ok, err)
 
     # ================================================================ TERMİNAL
     def _send(self) -> None:
