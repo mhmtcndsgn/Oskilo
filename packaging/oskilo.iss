@@ -40,7 +40,6 @@ VersionInfoDescription={#MyAppName} kurulum
 PrivilegesRequired=lowest
 DefaultDirName={userpf}\{#MyAppName}
 DisableDirPage=yes
-DefaultGroupName={#MyAppName}
 DisableProgramGroupPage=yes
 UsePreviousAppDir=no
 ArchitecturesAllowed=x64compatible
@@ -80,7 +79,7 @@ Type: filesandordirs; Name: "{app}\_oskilo_old"
 Source: "{#SourceDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 
 [Icons]
-Name: "{group}\{#MyAppName}"; Filename: "{app}\{#MyAppExe}"
+Name: "{autoprograms}\{#MyAppName}"; Filename: "{app}\{#MyAppExe}"
 Name: "{userdesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExe}"; Tasks: desktopicon
 
 [Run]
