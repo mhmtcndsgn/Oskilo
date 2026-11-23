@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (c) 2026 Mehmet Can Dusgun (mhmtcndsgn) — Oskilo
 """İşletim sistemiyle ilgili küçük yardımcılar.
 
 * Kurulum bütünlüğü: derleme sırasında her dosyanın SHA-256 parmak izi

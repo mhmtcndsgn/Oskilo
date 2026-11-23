@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (c) 2026 Mehmet Can Dusgun (mhmtcndsgn) — Oskilo
 """Oturumu TXT / CSV / Excel (.xlsx) olarak dışa aktarır."""
 from __future__ import annotations
 
@@ -47,8 +49,9 @@ def _notes_by_row(notes, n: int) -> dict[int, str]:
     return out
 
 
-def _columns(s: Session, lang: str, n: int, notes=None, units=None):
-    """(başlıklar, satır üreten fonksiyon) döndürür."""
+def _columns(s: Session, lang: str, n: int, notes=None, units=None, filt: dict | None = None):
+    """(başlıklar, satır üreten fonksiyon) döndürür. filt verilirse kanalların ardından süzülmüş
+    sütunlar eklenir (ham sütunlar hiç değişmez)."""
     t = T(lang)
     notes = s.notes if notes is None else notes
     units = s.units if units is None else units
@@ -81,6 +84,18 @@ def _columns(s: Session, lang: str, n: int, notes=None, units=None):
             getters.append(lambda i, col=col: col[i])
         else:
             getters.append(lambda i, col=col, u=u: convert(col[i], u))
+    if filt and n:
+        from .analysis import apply_filter
+        import numpy as np
+
+        for name, col in zip(s.channels, s.cols):
+            u = unit_of(units, name)
+            y = np.asarray(col[:n], dtype=np.float64)
+            if u is not None:
+                y = convert(y, u)
+            fy = apply_filter(y, filt["kind"], filt["param"], filt.get("fs", 0.0))
+            heads.append(f"{label(name, u)} ({filt.get('label', 'filtered')})")
+            getters.append(lambda i, fy=fy: (round(float(fy[i]), 9) if fy[i] == fy[i] else ""))
     return heads, getters
 
 
@@ -150,6 +165,22 @@ def default_filename(s: Session, prefix: str, fmt: str) -> str:
     return f"{safe_prefix(prefix)}{tag}_{stamp}{FORMATS[fmt]}"
 
 
+def _remove_stale_tmp(folder: str, name: str, age_s: float = 3600) -> None:
+    """Elektrik kesilip yarıda kalan eski yazmanın geçici dosyasını siler (sadece bu dosyanınkini)."""
+    prefix = f".{name}."
+    now = time.time()
+    try:
+        for entry in os.scandir(folder):
+            if entry.name.startswith(prefix) and entry.name.endswith(".tmp") and entry.is_file():
+                try:
+                    if now - entry.stat().st_mtime > age_s:
+                        os.remove(entry.path)
+                except OSError:
+                    pass
+    except OSError:
+        pass
+
+
 def _replace(tmp: str, path: str) -> None:
     """os.replace; Windows'ta dosya kısa süre kilitliyse (antivirüs, OneDrive) birkaç kez dener."""
     for i in range(10):
@@ -163,7 +194,7 @@ def _replace(tmp: str, path: str) -> None:
 
 
 def export_session(s: Session, path: str, fmt: str, lang: str = "tr", info: dict | None = None,
-                   units: dict | None = None) -> str:
+                   units: dict | None = None, filt: dict | None = None) -> str:
     """Dosyayı önce geçici adla yazar, bitince asıl ada taşır.
 
     Böylece yazma yarıda kalırsa (disk doldu, program kapandı) yarım/bozuk bir
@@ -181,15 +212,16 @@ def export_session(s: Session, path: str, fmt: str, lang: str = "tr", info: dict
     if info is not None:
         info["rows"] = n
         info["notes"] = len(notes)
+    _remove_stale_tmp(folder, os.path.basename(path))
     fd, tmp = tempfile.mkstemp(dir=folder, prefix=f".{os.path.basename(path)}.", suffix=".tmp")
     os.close(fd)
     try:
         if fmt == "xlsx":
-            _export_xlsx(s, tmp, lang, n, notes, units)
+            _export_xlsx(s, tmp, lang, n, notes, units, filt)
         elif fmt == "csv":
-            _export_delim(s, tmp, lang, ",", False, n, notes, units)
+            _export_delim(s, tmp, lang, ",", False, n, notes, units, filt)
         else:
-            _export_delim(s, tmp, lang, "\t", True, n, notes, units)
+            _export_delim(s, tmp, lang, "\t", True, n, notes, units, filt)
         _replace(tmp, path)
     except BaseException:
         try:
@@ -201,8 +233,8 @@ def export_session(s: Session, path: str, fmt: str, lang: str = "tr", info: dict
 
 
 def _export_delim(s: Session, path: str, lang: str, delim: str, comments: bool, n: int,
-                  notes=None, units=None) -> None:
-    heads, getters = _columns(s, lang, n, notes, units)
+                  notes=None, units=None, filt=None) -> None:
+    heads, getters = _columns(s, lang, n, notes, units, filt)
     with open(path, "w", encoding="utf-8-sig" if not comments else "utf-8", newline="") as f:
         if comments:
             for k, v in summary_rows(s, lang, n, notes, units):
@@ -222,7 +254,7 @@ def _num(v):
     return v
 
 
-def _export_xlsx(s: Session, path: str, lang: str, n: int, notes=None, units=None) -> None:
+def _export_xlsx(s: Session, path: str, lang: str, n: int, notes=None, units=None, filt=None) -> None:
     from openpyxl import Workbook
     from openpyxl.cell import WriteOnlyCell
     from openpyxl.chart import Reference, ScatterChart, Series
@@ -231,7 +263,8 @@ def _export_xlsx(s: Session, path: str, lang: str, n: int, notes=None, units=Non
 
     t = T(lang)
     units = s.units if units is None else units
-    heads, getters = _columns(s, lang, n, notes, units)
+    heads, getters = _columns(s, lang, n, notes, units, filt)
+    n_filt = len(s.channels) if (filt and n) else 0         # süzülmüş sütunlar kanalların ardında
     wb = Workbook(write_only=True)
 
     hdr_font = Font(bold=True, color="FFFFFF")
@@ -314,7 +347,7 @@ def _export_xlsx(s: Session, path: str, lang: str, n: int, notes=None, units=Non
             if name in heads:
                 x_col = heads.index(name) + 1
                 break
-        first_ch = len(heads) - len(s.channels) + 1
+        first_ch = len(heads) - n_filt - len(s.channels) + 1
         ws_chart = wb.create_sheet(t("sheet_chart"))
         ch = ScatterChart()
         ch.title = t("chart_title")
@@ -326,7 +359,7 @@ def _export_xlsx(s: Session, path: str, lang: str, n: int, notes=None, units=Non
         ch.y_axis.delete = False
         xref = Reference(ws_data, min_col=x_col, min_row=2, max_row=rows + 1)
         palette = ["1F6FEB", "2DA44E", "CF222E", "8250DF", "BF8700", "1B7C83", "E16F24", "57606A"]
-        for ci in range(first_ch, len(heads) + 1):
+        for ci in range(first_ch, first_ch + len(s.channels)):     # grafikte ham kanallar
             yref = Reference(ws_data, min_col=ci, min_row=1, max_row=rows + 1)
             ser = Series(yref, xref, title_from_data=True)
             ser.marker.symbol = "none"

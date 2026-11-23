@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (c) 2026 Mehmet Can Dusgun (mhmtcndsgn) — Oskilo
 """Kayıpsız seri port okuma motoru.
 
 Eski sürümde veri kaybının sebebi, okuma thread'inin her satırda dosyayı
@@ -21,6 +23,7 @@ from __future__ import annotations
 import collections
 import math
 import os
+import shutil
 import queue
 import random
 import threading
@@ -41,6 +44,9 @@ HEX_CHUNK_MAX = 4096              # HEX görünüm için saklanan en büyük par
 _LOST = object()                  # okuyucudan işlemciye: "bağlantı koptu" işareti
 _CRC = object()                   # ikili mod: atılan çerçeve (terminal satırı yerine sayılır)
 SKIP_WARN_UNSYNCED = 512          # hiç geçerli çerçeve gelmeden bu kadar bayt atlanırsa uyar (biçim yanlış)
+
+
+RAW_MIN_FREE = 2 * 1024 ** 3     # diskte bundan az yer kalınca ham yedek durur (kayıt sürer)
 
 
 class Engine:
@@ -111,6 +117,11 @@ class Engine:
     def _open_raw(self, path: str) -> None:
         try:
             os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+            # Haftalarca süren kayıtta ham yedek diski doldurmasın: asıl kayıt (CSV/Excel) için yer kalsın
+            if shutil.disk_usage(os.path.dirname(path) or ".").free < RAW_MIN_FREE:
+                self.events_q.put(("error", "raw:lowdisk"))
+                self._raw = None
+                return
             self._raw = open(path, "ab", buffering=1024 * 1024)
             self._raw_size = self._raw.tell()
         except OSError as e:

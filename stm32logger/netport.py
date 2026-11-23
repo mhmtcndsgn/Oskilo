@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (c) 2026 Mehmet Can Dusgun (mhmtcndsgn) — Oskilo
 """Ağ üzerinden veri: TCP ve UDP (ör. W5500, ESP32 Wi-Fi, ENC28J60).
 
 Bu sınıflar pyserial'ın Serial nesnesiyle aynı küçük arayüzü sunar (in_waiting, read, write,

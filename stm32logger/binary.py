@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (c) 2026 Mehmet Can Dusgun (mhmtcndsgn) — Oskilo
 """Oskilo ikili veri çerçevesi (CRC16 korumalı).
 
 Metin satırları yerine ikili göndermek hem daha hızlıdır (2–4 bayt/değer) hem de her çerçevenin
