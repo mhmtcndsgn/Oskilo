@@ -122,6 +122,7 @@ def test_tcp_binary_frames():
         board.stop()
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="Windows'ta SO_REUSEADDR ile aynı porta ikinci sahte kart güvenilir kurulamıyor")
 def test_tcp_board_restart_reconnects():
     """Kart yeniden başlar (bağlantı kapanır): o ana kadarki veri "lost" olarak biter, yeniden bağlanılır."""
     port = _free_port()
@@ -159,7 +160,8 @@ def test_tcp_board_restart_reconnects():
 
 def test_tcp_connect_refused_and_timeout():
     port = _free_port()
-    with pytest.raises(ConnectionRefusedError):
+    # Windows kapalı porta bağlanmayı birkaç kez dener: reddedildi yerine zaman aşımı gelebilir
+    with pytest.raises((ConnectionRefusedError, TimeoutError) if sys.platform == "win32" else ConnectionRefusedError):
         open_port(f"tcp://127.0.0.1:{port}", 0, "live")
     t0 = time.monotonic()
     with pytest.raises(OSError):                                   # yönlendirilemeyen adres: zaman aşımı
