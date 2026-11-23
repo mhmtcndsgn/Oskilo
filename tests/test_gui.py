@@ -319,7 +319,7 @@ def test_small_screen_fits(app, win):
     assert win.centralWidget().minimumSizeHint().width() <= scr.width()
     assert win.minimumWidth() <= scr.width() and win.minimumHeight() <= scr.height()
     win._set_lang("en")
-    assert win.btn_png.text() == "🖼" and win.btn_png.toolTip() == "Save PNG"
+    assert win.btn_png.text() == "📷" and win.btn_png.toolTip() == "Save PNG"
     win._apply_compact(False)
     assert win.btn_png.text() == "Save PNG" and win.lbl_x.isVisible()
 

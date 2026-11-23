@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (c) 2026 Mehmet Can Dusgun (mhmtcndsgn) — Oskilo
 """Çekirdek testleri:  python -m pytest tests  (ya da: python tests/test_core.py)"""
 import math
 import os
@@ -11,7 +13,7 @@ from stm32logger.engine import DemoSerial, Engine  # noqa: E402
 from stm32logger.exporter import export_session  # noqa: E402
 from stm32logger.importer import load_file  # noqa: E402
 from stm32logger.parser import parse_line  # noqa: E402
-from stm32logger.session import Session  # noqa: E402
+from stm32logger.session import RELOCK_COLS_AFTER, Session  # noqa: E402
 
 
 def test_parse_variants():
@@ -830,3 +832,140 @@ def test_trigger_chain_links():
     eng.stop()
     first = eng.done_q.get()
     assert first.next_session is None and first.unsaved()
+
+
+# ------------------------------------------------------------------ filtreler (v3.4)
+def test_filters_basic():
+    import numpy as np
+    from stm32logger import analysis as a
+
+    fs = 1000.0
+    t = np.arange(20000) / fs
+    clean = np.sin(2 * np.pi * 2 * t) + 0.3
+    hum = 0.5 * np.sin(2 * np.pi * 50 * t)
+    mid = slice(2000, -2000)
+    # alçak geçiren: 50 Hz ve gürültü gider, 2 Hz kalır
+    f = a.apply_filter(clean + hum, "lowpass", 10, fs)
+    assert np.sqrt(np.mean((f[mid] - clean[mid]) ** 2)) < 0.02
+    # çentik: sadece 50 Hz gider
+    f = a.apply_filter(clean + hum, "notch", 50, fs)
+    assert np.sqrt(np.mean((f[mid] - clean[mid]) ** 2)) < 0.05
+    # yüksek geçiren: sabit kayma (0.3) gider
+    f = a.apply_filter(clean, "highpass", 0.5, fs)
+    assert abs(float(np.mean(f[mid]))) < 0.05
+    # medyan: tek nokta sıçrama silinir
+    y = np.zeros(100)
+    y[50] = 100.0
+    assert a.apply_filter(y, "median", 5).max() == 0.0
+    # hareketli ortalama: sabit sinyal aynen kalır (kenarlar dahil)
+    assert np.allclose(a.apply_filter(np.full(50, 7.0), "mavg", 9), 7.0)
+    # kapalı / Hz yok / Nyquist üstü: veri aynen döner
+    assert np.array_equal(a.apply_filter(clean, "off", 0), clean)
+    assert np.array_equal(a.apply_filter(clean, "lowpass", 10, 0.0), clean)
+    assert not a.filter_ready("lowpass", 600, fs) and a.filter_ready("lowpass", 10, fs)
+    assert not a.filter_ready("notch", 50, 0) and a.filter_ready("median", 5, 0)
+
+
+def test_filter_keeps_gaps():
+    import numpy as np
+    from stm32logger import analysis as a
+
+    y = np.arange(100, dtype=float)
+    y[40:45] = np.nan                                   # kayıp satırlar
+    f = a.apply_filter(y, "mavg", 5)
+    assert np.isnan(f[40:45]).all() and np.isfinite(f[:40]).all() and np.isfinite(f[45:]).all()
+    assert abs(f[39] - 38.0) < 1.5                      # boşluk komşusuna sıçramaz
+
+
+def test_export_filtered_columns():
+    s = Session(mode="live", seq_mode="off")
+    with s.lock:
+        for i in range(200):
+            s.add(i * 0.01, parse_line(f"{(i % 2) * 10},{i}"))
+        s.flush_pending()
+    assert s.n == 200
+    with tempfile.TemporaryDirectory() as d:
+        p = os.path.join(d, "x.csv")
+        export_session(s, p, "csv", "tr", filt={"kind": "mavg", "param": 2, "fs": 0, "label": "süzülmüş"})
+        with open(p, encoding="utf-8-sig") as f:
+            head = f.readline().strip().split(",")
+            row = f.readlines()[100].strip().split(",")
+        assert head[-2:] == [h + " (süzülmüş)" for h in head[-4:-2]]
+        assert abs(float(row[-2]) - 5.0) < 1e-6         # 0,10,0,10… ortalaması 5
+
+
+def _feed_lines(s, lines, t0=0.0):
+    with s.lock:
+        for i, ln in enumerate(lines):
+            s.add(t0 + i * 0.01, parse_line(ln))
+        s.flush_pending()
+
+
+def test_seq_wrap_32bit():
+    s = Session(mode="live", seq_mode="on")
+    s.seq32 = True
+    m = 1 << 32
+    _feed_lines(s, [f"{v % m},1" for v in range(m - 5, m + 5)])
+    assert s.n == 10 and not s.gaps and s.out_of_order == 0
+    assert list(s.seq) == list(range(m - 5, m + 5))
+
+
+def test_seq_wrap_16bit_and_reset():
+    s = Session(mode="live", seq_mode="on")
+    _feed_lines(s, [f"{v},1" for v in range(65530, 65536)] + [f"{v},1" for v in range(3, 10)])
+    s.finish("stop")
+    assert [g.missing for g in s.gaps] == [3] and s.out_of_order == 0
+    # kart ortada sıfırlandı (40000 -> 0): taşma sanılıp 25 bin kayıp yazılmamalı
+    s = Session(mode="live", seq_mode="on")
+    _feed_lines(s, [f"{v},1" for v in range(39990, 40000)] + [f"{v},1" for v in range(0, 10)])
+    s.finish("stop")
+    assert s.missing == 0 and s.out_of_order == 1
+
+
+def test_column_relock_after_reflash():
+    s = Session(mode="live", seq_mode="off")
+    _feed_lines(s, ["1,2,3"] * 20 + ["1,2,3,4"] * 100)
+    assert s.n == 20 + 100 - (RELOCK_COLS_AFTER - 1) and len(s.channels) == 4
+    # tek tük bozuk satır sabitlemeyi bozmaz
+    s = Session(mode="live", seq_mode="off")
+    _feed_lines(s, ["1,2,3"] * 20 + ["1,2"] + ["1,2,3"] * 5 + ["1,2,3,4,5"])
+    assert s.n == 25 and s.bad_lines == 2
+
+
+def test_segment_split_keeps_doubtful_seq():
+    a = Session(mode="live", seq_mode="on")
+    _feed_lines(a, [f"{v},1" for v in range(10)] + ["999999,1"])    # son satırın sıra no'su bozuk geldi
+    a.finish("segment")
+    b = Session(mode="live", seq_mode="on")
+    b.continue_from(a, keep_seq=True)
+    _feed_lines(b, [f"{v},1" for v in range(11, 20)])
+    b.finish("stop")
+    assert not a.gaps and not b.gaps and b.fixed_seq == 1 and b.missing == 0
+
+
+def test_filter_short_runs_no_crash():
+    import numpy as np
+    from stm32logger import analysis as a
+
+    y = np.array([1.0, np.nan, 2.0, 3.0, np.nan, 4.0] * 50)
+    for kind, p, fs in (("mavg", 9, 0), ("median", 5, 0), ("lowpass", 5, 1000), ("highpass", 1, 1000),
+                        ("notch", 50, 1000)):
+        f = a.apply_filter(y, kind, p, fs)
+        assert f.shape == y.shape and np.array_equal(np.isnan(f), np.isnan(y))
+
+
+def test_import_turkish_excel_csv_and_bad_files():
+    with tempfile.TemporaryDirectory() as d:
+        p = os.path.join(d, "tr.csv")
+        with open(p, "wb") as f:     # Excel "CSV (noktalı virgülle ayrılmış)", Türkçe Windows: cp1254
+            f.write("Sıra;Seq;Zaman (s);Kanal 1\r\n1;0;0;1,5\r\n2;1;0,001;3,25\r\n".encode("cp1254"))
+        s = load_file(p)
+        assert s.channels == ["Kanal 1"] and list(s.cols[0]) == [1.5, 3.25] and s.sample_rate == 1000.0
+        p = os.path.join(d, "long.txt")
+        with open(p, "w") as f:      # satır sonu olmayan dev satır belleği şişirmez, atlanır
+            f.write("1,2\n" + "9" * 3_000_000 + "\n3,4\n5,6\n7,8\n9,10\n")
+        assert list(load_file(p).cols[0]) == [1.0, 3.0, 5.0, 7.0, 9.0]
+        p = os.path.join(d, "seq.csv")
+        with open(p, "w") as f:      # sığmayan sıra no dosyanın tamamını reddettirmez
+            f.write("Seq,Kanal 1\n1e20,5\n2,6\n")
+        assert load_file(p).n == 2
