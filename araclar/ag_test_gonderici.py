@@ -29,6 +29,14 @@ CHUNK = 1400          # UDP paket boyutu (Ethernet'e sığar)
 SUB_TIMEOUT = 5.0
 
 
+def print(*args, **kw):  # noqa: A001  Türkçe karakter yazamayan konsolda (cp1252) çökmesin
+    import builtins
+    try:
+        builtins.print(*args, **kw)
+    except UnicodeEncodeError:
+        builtins.print(*(str(a).encode("ascii", "replace").decode() for a in args), **kw)
+
+
 def _local_ip_for(peer: str) -> str:
     if peer.startswith("127."):
         return "127.0.0.1"
