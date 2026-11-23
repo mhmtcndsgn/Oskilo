@@ -217,7 +217,7 @@ def test_unblock_only_known_files_and_verify():
 
         evil = os.path.join(d, "_internal", "evil.dll")       # sonradan klasöre eklenen dosya
         open(evil, "w").write("x")
-        open(dll, "a", encoding="utf-8").write("değişti")                       # değiştirilmiş dosya
+        open(dll, "a").write("değişti")                       # değiştirilmiş dosya
         for p in (exe, dll, evil, man):
             # Linux'ta ":" dosya adında geçerli; Windows'taki alternatif akışı taklit eder
             open(p + system.ZONE, "w").write("[ZoneTransfer]\nZoneId=3\n")
@@ -231,8 +231,7 @@ def test_unblock_only_known_files_and_verify():
         assert system.is_blocked(dll) and system.is_blocked(evil)
         assert os.path.exists(exe) and os.path.exists(dll)     # asıl dosyalar duruyor
         os.remove(evil)
-        if os.path.exists(evil + system.ZONE):               # Windows'ta akış dosyayla birlikte silinir
-            os.remove(evil + system.ZONE)
+        os.remove(evil + system.ZONE)
         os.remove(os.path.join(d, "_internal", "Qt6Core.dll"))
         v = system.verify_install(d, man)
         assert v["missing"] == ["_internal/Qt6Core.dll"]
@@ -286,7 +285,7 @@ def test_atomic_export_keeps_old_file_on_error():
     orig = exporter._export_delim
 
     def boom(*a, **k):
-        open(a[1], "w", encoding="utf-8").write("yarım")
+        open(a[1], "w").write("yarım")
         raise OSError("disk full")
 
     exporter._export_delim = boom

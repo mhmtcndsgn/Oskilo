@@ -45,7 +45,7 @@ def make_tree(root: Path, version: str, files: dict) -> Path:
 
 
 def snapshot(root: Path) -> dict:
-    return {p.relative_to(root).as_posix(): p.read_bytes() for p in sorted(root.rglob("*")) if p.is_file()}
+    return {str(p.relative_to(root)): p.read_bytes() for p in sorted(root.rglob("*")) if p.is_file()}
 
 
 OLD = {EXE: b"old exe", "_internal/a.dll": b"A1", "_internal/gone.dll": b"G", "_internal/sub/x.pyd": b"X1"}
@@ -296,7 +296,6 @@ def test_interrupted_apply_is_recoverable(tmp_path, monkeypatch, stop_after):
     assert _installed(root) == before
 
 
-@pytest.mark.skipif(sys.platform == "win32", reason="Windows'ta yardımcı, exe yolundan tanınır (gerçek exe ile packaging/test_update_windows.py dener)")
 def test_preflight_busy_while_helper_runs(tmp_path):
     root, src = _staged(tmp_path)
     assert u.apply(src, root, lambda m: None)
@@ -304,7 +303,7 @@ def test_preflight_busy_while_helper_runs(tmp_path):
     import subprocess
     p = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"])
     try:
-        (root / u.OLD_DIR / u.HELPER_PID).write_text(str(p.pid), encoding="utf-8")
+        (root / u.OLD_DIR / u.HELPER_PID).write_text(str(p.pid))
         assert u.preflight([], root) == "busy"                            # güncelleme sürüyor: dokunma
         assert u.preflight(["x", "--update-helper", str(p.pid)], root) is None   # yardımcının açtığı sürüm
         u.startup([], root, "3.2.1")
@@ -318,7 +317,7 @@ def test_committed_but_unverified_retries_then_rolls_back(tmp_path):
     root, src = _staged(tmp_path)
     before = _installed(root)
     assert u.apply(src, root, lambda m: None)
-    (root / u.OLD_DIR / u.HELPER_PID).write_text("0", encoding="utf-8")
+    (root / u.OLD_DIR / u.HELPER_PID).write_text("0")
     assert u.preflight([], root) is None and u.preflight([], root) is None   # iki deneme hakkı
     st = u.preflight([], root)                                             # 3. açılış da doğrulanmadı
     if st == "delegated":
@@ -327,7 +326,7 @@ def test_committed_but_unverified_retries_then_rolls_back(tmp_path):
     # açılış başarılıysa doğrulanır ve yedek silinir
     root2, src2 = _staged(tmp_path / "b")
     assert u.apply(src2, root2, lambda m: None)
-    (root2 / u.OLD_DIR / u.HELPER_PID).write_text("0", encoding="utf-8")
+    (root2 / u.OLD_DIR / u.HELPER_PID).write_text("0")
     assert u.preflight([], root2) is None
     u.mark_started([], root2)
     assert (root2 / u.OLD_DIR / u.VERIFIED).exists()
@@ -414,15 +413,15 @@ def test_startup_states(tmp_path):
     root, src = _staged(tmp_path)
     st = u.startup([], root, "3.2.0")
     assert st["pending"]["version"] == "3.2.1" and st["failed"] is None
-    (src / MAN).write_text((src / MAN).read_text(encoding="utf-8") + "# değişti\n", encoding="utf-8")       # bekleyen indirme bozulmuş
+    (src / MAN).write_text((src / MAN).read_text() + "# değişti\n")       # bekleyen indirme bozulmuş
     assert u.pending(root, "3.2.0") is None
     root, src = _staged(tmp_path / "b")
-    (root / u.NEW_DIR / u.FAILED).write_text("x", encoding="utf-8")
+    (root / u.NEW_DIR / u.FAILED).write_text("x")
     st = u.startup([], root, "3.2.0")
     assert st["failed"] and st["pending"] is None and not (root / u.NEW_DIR).exists()
     # güncellemeden sonraki ilk açılış: işaret bırakır, artıkları (doğrulanınca) temizler
     (root / u.OLD_DIR).mkdir()
-    (root / u.OLD_DIR / u.VERIFIED).write_text("ok", encoding="utf-8")
+    (root / u.OLD_DIR / u.VERIFIED).write_text("ok")
     (root / u.NEW_DIR).mkdir()
     u.mark_started(["x", "--updated-from", "3.2.0"], root)
     assert (root / u.NEW_DIR / u.STARTED).exists()
@@ -456,7 +455,7 @@ def test_interrupted_rollback_is_completed_next_launch(tmp_path, monkeypatch):
     with pytest.raises(Killed):
         u.rollback(root, lambda m: None)
     monkeypatch.undo()
-    (root / u.OLD_DIR / u.HELPER_PID).write_text("0", encoding="utf-8")
+    (root / u.OLD_DIR / u.HELPER_PID).write_text("0")
     assert (root / u.OLD_DIR / u.ROLLING).exists() and not (root / u.OLD_DIR / u.COMMITTED).exists()
     u.mark_started([], root)
     assert not (root / u.OLD_DIR / u.VERIFIED).exists()                    # yarım geri alma "doğrulanmaz"
@@ -507,8 +506,8 @@ def test_unreadable_journal_is_not_treated_as_empty(tmp_path, monkeypatch):
 def test_error_before_apply_does_not_replay_previous_journal(tmp_path, monkeypatch):
     root, src = _staged(tmp_path)
     assert u.apply(src, root, lambda m: None)                              # önceki güncelleme (doğrulanmış,
-    (root / u.OLD_DIR / u.VERIFIED).write_text("ok", encoding="utf-8")                       # yedeği henüz silinmemiş)
-    (root / u.OLD_DIR / u.HELPER_PID).write_text("12345", encoding="utf-8")
+    (root / u.OLD_DIR / u.VERIFIED).write_text("ok")                       # yedeği henüz silinmemiş)
+    (root / u.OLD_DIR / u.HELPER_PID).write_text("12345")
     after = _installed(root)
     src2 = make_tree(root / u.NEW_DIR / "Oskilo", "3.2.1", NEW)
     (root / u.NEW_DIR / u.READY).write_text(json.dumps({"version": "3.2.1", "manifest": _sha((src2 / MAN).read_bytes())}))
