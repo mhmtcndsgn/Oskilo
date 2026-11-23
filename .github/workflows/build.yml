@@ -156,7 +156,7 @@ jobs:
           if ($p.ExitCode -ne 0) { Get-Content kurulum.log -Tail 40; exit 1 }
           $app = Join-Path $env:LOCALAPPDATA "Programs\Oskilo"
           if (-not (Test-Path "$app\Oskilo.exe")) { Write-Host "Oskilo.exe kurulmadı"; exit 1 }
-          if (-not (Test-Path "$app\manifest.sha256")) { Write-Host "manifest yok (güncelleme çalışmaz)"; exit 1 }
+          if (-not (Test-Path "$app\_internal\manifest.sha256")) { Write-Host "manifest yok (güncelleme çalışmaz)"; exit 1 }
           $key = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\{C7A79E34-102C-58D8-A91C-73C48CFE1405}_is1"
           $reg = Get-ItemProperty $key
           Write-Host "Uygulamalar listesi: $($reg.DisplayName) $($reg.DisplayVersion) -> $($reg.InstallLocation)"
