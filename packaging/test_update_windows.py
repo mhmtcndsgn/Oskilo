@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (c) 2026 Mehmet Can Dusgun (mhmtcndsgn) — Oskilo
 """Uygulama içi güncellemeyi gerçek Windows paketiyle dener (CI'da, derlemeden sonra).
 
     python packaging/test_update_windows.py dist/Oskilo

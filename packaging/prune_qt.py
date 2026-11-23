@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (c) 2026 Mehmet Can Dusgun (mhmtcndsgn) — Oskilo
 """Derlenen pakette hiç kullanılmayan Qt parçalarını siler (dosya parmak izleri bundan SONRA alınır).
 
     python packaging/prune_qt.py dist/Oskilo
