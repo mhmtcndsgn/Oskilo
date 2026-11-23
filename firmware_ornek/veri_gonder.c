@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 Mehmet Can Dusgun (mhmtcndsgn) — Oskilo örnek kart kodu
 /*
  * Oskilo — STM32 tarafı örnek kod (HAL), metin biçimi
  * ====================================================
