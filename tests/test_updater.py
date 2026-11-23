@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (c) 2026 Mehmet Can Dusgun (mhmtcndsgn) — Oskilo
 """Uygulama içi güncelleme testleri (ağ ve Qt gerekmez).
 
 İndirme, sahte bir GitHub sunucusu yerine `updater._open` değiştirilerek test edilir.

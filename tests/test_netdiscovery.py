@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (c) 2026 Mehmet Can Dusgun (mhmtcndsgn) — Oskilo
 """Ağda kart bulma (keşif) testleri: sahte kart ile, bu bilgisayarın içinde (127.0.0.1)."""
 import argparse
 import importlib.util

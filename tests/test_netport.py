@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (c) 2026 Mehmet Can Dusgun (mhmtcndsgn) — Oskilo
 """Ağ (TCP/UDP) bağlantısı testleri: gerçek soketlerle, bu bilgisayarın içinde (127.0.0.1)."""
 import os
 import socket
