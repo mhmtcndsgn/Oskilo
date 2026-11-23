@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (c) 2026 Mehmet Can Dusgun (mhmtcndsgn) — Oskilo
 """Güncelleme indirme penceresi: ilerleme çubuğu ve İptal.
 
 İş arka planda (thread) çalışır; pencere durumu bir zamanlayıcıyla okur. Böylece Qt nesnelerine

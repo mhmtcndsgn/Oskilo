@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (c) 2026 Mehmet Can Dusgun (mhmtcndsgn) — Oskilo
 """Küçük, yeniden kullanılabilir arayüz parçaları."""
 from __future__ import annotations
 

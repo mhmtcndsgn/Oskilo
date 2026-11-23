@@ -1,5 +1,9 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (c) 2026 Mehmet Can Dusgun (mhmtcndsgn) — Oskilo
 """'Kart bulunamıyor mu?' penceresi: olası sebepler ve Windows güvenlik duvarı düğmesi."""
 from __future__ import annotations
+
+import threading
 
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtWidgets import (QApplication, QDialog, QFrame, QHBoxLayout, QLabel, QLayout, QPushButton,
@@ -90,9 +94,43 @@ class NetDiagDialog(QDialog):
         self._timer.start()
         self._refresh()
 
+    def _bg(self, fn, done) -> None:
+        """fn'i arka planda çalıştırır (ağ / netsh / UAC beklemesi pencereyi dondurmasın), bitince done(sonuç)."""
+        box = {}
+
+        def job():
+            try:
+                box["r"] = fn()
+            except Exception as e:  # noqa: BLE001
+                box["e"] = e
+
+        th = threading.Thread(target=job, name="netdiag", daemon=True)
+        th.start()
+        poll = QTimer(self, interval=100)
+
+        def check():
+            if th.is_alive():
+                return
+            poll.stop()
+            poll.deleteLater()
+            done(box.get("r"), box.get("e"))
+
+        poll.timeout.connect(check)
+        poll.start()
+
     def _refresh(self) -> None:
+        if getattr(self, "_ips_busy", False):
+            return
+        self._ips_busy = True
+
+        def done(ips, err):
+            self._ips_busy = False
+            self._show_ips(ips or [])
+
+        self._bg(netport.local_ipv4, done)
+
+    def _show_ips(self, ips: list) -> None:
         t = self.t
-        ips = netport.local_ipv4()
         self.lbl_found.setText(t("diag_found", n=len(self.disc.devices())))
         self.lbl_ips.setText(t("diag_ips", ips=", ".join(ips)) if ips else t("diag_ips_none"))
         apipa = any(ip.startswith("169.254.") for ip in ips)
@@ -107,18 +145,25 @@ class NetDiagDialog(QDialog):
         self.lbl_fw.show()
 
     def _check_rule(self) -> None:
-        if winfirewall.rule_exists():
-            self._show_fw(self.t("fw_exists"))
+        def done(exists, err):
+            if exists:
+                self._show_fw(self.t("fw_exists"))
+
+        self._bg(winfirewall.rule_exists, done)
 
     def _allow(self) -> None:
         t = self.t
+        self.btn_fw.setEnabled(False)
         QApplication.setOverrideCursor(Qt.WaitCursor)
-        try:
-            res, detail = winfirewall.allow_program()
-        finally:
+
+        def done(r, err):
             QApplication.restoreOverrideCursor()
-        text = {"ok": t("fw_ok"), "cancel": t("fw_cancel"), "notwin": t("fw_notwin")}.get(
-            res, t("fw_fail", err=detail))
-        self._show_fw(text)
-        if res == "ok":
-            self.disc.query_now()
+            self.btn_fw.setEnabled(True)
+            res, detail = r if r else ("fail", str(err))
+            text = {"ok": t("fw_ok"), "cancel": t("fw_cancel"), "notwin": t("fw_notwin")}.get(
+                res, t("fw_fail", err=detail))
+            self._show_fw(text)
+            if res == "ok":
+                self.disc.query_now()
+
+        self._bg(winfirewall.allow_program, done)
