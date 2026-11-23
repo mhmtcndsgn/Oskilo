@@ -11,7 +11,8 @@
 <p align="center">
   <b>STM32, Arduino, ESP32</b> ve seri porttan veri gönderen her kart için kayıpsız veri kaydedici.<br>
   Canlı grafik, kayıp veri tespiti, FFT, eşik alarmları ve tek tıkla <b>Excel / CSV / TXT</b> çıktısı.<br>
-  <sub>Eski adı: <i>Data Logger</i> (v2.x)</sub>
+  <sub>Eski adı: <i>Data Logger</i> (v2.x)</sub><br>
+  <sub><b>IECIST</b></sub>
 </p>
 
 <p align="center">
@@ -19,7 +20,7 @@
   <a href="https://github.com/mhmtcndsgn/Oskilo/releases/latest/download/Oskilo_macOS.dmg"><img src="https://img.shields.io/badge/%C4%B0ndir-macOS-000000?style=for-the-badge&logo=apple&logoColor=white" alt="macOS için indir"></a>
   <br>
   <a href="https://github.com/mhmtcndsgn/Oskilo/releases/latest"><img src="https://img.shields.io/github/v/release/mhmtcndsgn/Oskilo?label=son%20s%C3%BCr%C3%BCm&style=flat-square" alt="Son sürüm"></a>
-  <img src="https://img.shields.io/badge/lisans-MIT-green?style=flat-square" alt="MIT lisansı">
+  <img src="https://img.shields.io/badge/lisans-GPL--3.0-blue?style=flat-square" alt="GPL-3.0 lisansı">
 </p>
 
 ![Oskilo](docs/ekran_deney.png)
@@ -69,18 +70,34 @@
 
 ## ⬇️ Kurulum
 
-### Windows 10 / 11
+### Windows 10 / 11 — kurulum programı (önerilen)
+1. **[Oskilo_Setup.exe](https://github.com/mhmtcndsgn/Oskilo/releases/latest/download/Oskilo_Setup.exe)** dosyasını indirip çalıştırın → **İleri** → **Kur**.
+   - Yönetici izni istemez: sadece sizin kullanıcınıza kurar (`%LOCALAPPDATA%\Programs\Oskilo`).
+   - Başlat menüsüne eklenir (masaüstü kısayolu isteğe bağlı), **Ayarlar → Uygulamalar**'dan kaldırılır. Kaldırırken ayarlarınızın da silinip silinmeyeceği sorulur; kayıtlarınız (Belgeler\Oskilo) hiçbir zaman silinmez.
+   - Uygulama içinden güncelleme (**? → Güncellemeleri denetle**) çalışmaya devam eder.
+   - Kurulum programı henüz dijital olarak imzalı değil (bkz. [Kod imzalama](#-kod-imzalama-politikası)). Mavi "Windows bilgisayarınızı korudu" penceresi çıkarsa **Ek bilgi → Yine de çalıştır**.
+
+### Windows — kurulumsuz (taşınabilir)
 1. **[Oskilo_Windows.zip](https://github.com/mhmtcndsgn/Oskilo/releases/latest/download/Oskilo_Windows.zip)** dosyasını indirin.
-2. **Zip'i açmadan önce** sağ tıklayın → **Özellikler** → alttaki **Engellemeyi kaldır** kutusunu işaretleyin → **Tamam**.
-   *Böylece "Bu dosyayı çalıştırmak istiyor musunuz?" / SmartScreen uyarısı çıkmaz. Uygulama henüz dijital olarak imzalı değil (bkz. [Kod imzalama](#-kod-imzalama-politikası)). Bu adımı atlarsanız uygulama ilk açılışta etiketi kendisi kaldırmayı teklif eder; uyarı sadece bir kez çıkar.*
-3. Zip'i çıkarın ve **`Oskilo.exe`**'yi çalıştırın. Exe yanındaki `_internal` klasörüyle birlikte durmalı.
+2. **Zip'i açmadan önce** sağ tıklayın → **Özellikler** → alttaki **Engellemeyi kaldır** → **Tamam** (SmartScreen uyarısı çıkmaz; atlarsanız uygulama ilk açılışta bunu kendisi teklif eder).
+3. Çıkarın ve **`Oskilo.exe`**'yi çalıştırın. Exe yanındaki `_internal` klasörüyle birlikte durmalı. USB bellek ve laboratuvar bilgisayarları için uygundur.
+
+### En düşük sistem gereksinimi
+| | En az | Önerilen |
+|---|---|---|
+| İşletim sistemi | Windows 10 64 bit / macOS 12 (Apple Silicon) | Windows 11 / macOS 14 |
+| İşlemci / bellek | 2 çekirdek, 4 GB | 4 çekirdek, 8 GB |
+| Ekran | 1366×768 (%100–150 ölçek) | 1920×1080 |
+| Disk | Uygulama için 400 MB + kayıtlar için yer | SSD |
+
+Yavaş bilgisayarda **🎨 → Hafif mod**'u açın: grafik daha seyrek ve yumuşatmasız çizilir. Kayıt hiç etkilenmez. 1 kHz × 4 kanal bir günlük kayıt CSV olarak yaklaşık 9 GB tutar; haftalarca sürecek testten önce diskteki boş yeri kontrol edin.
 
 ### macOS (Apple Silicon, M1 ve sonrası)
 1. **[Oskilo_macOS.dmg](https://github.com/mhmtcndsgn/Oskilo/releases/latest/download/Oskilo_macOS.dmg)** dosyasını indirin, uygulamayı **Applications** klasörüne sürükleyin.
 2. İlk açılış: uygulamayı bir kez açmayı deneyin, sonra **Sistem Ayarları → Gizlilik ve Güvenlik** sayfasında **Yine de Aç**'a basın (eski macOS'ta: uygulamaya sağ tık → **Aç**).
 
 ### İndirmeyi doğrulama (isteğe bağlı)
-- Dosyanın SHA-256 değerini sürüm sayfasındaki `SHA256SUMS.txt` ile karşılaştırın: PowerShell'de `Get-FileHash Oskilo_Windows.zip`, macOS'ta `shasum -a 256 Oskilo_macOS.dmg`.
+- Dosyanın SHA-256 değerini sürüm sayfasındaki `SHA256SUMS.txt` ile karşılaştırın: PowerShell'de `Get-FileHash Oskilo_Setup.exe`, macOS'ta `shasum -a 256 Oskilo_macOS.dmg`.
 - Bu reponun GitHub Actions'ında derlendiğini kontrol edin: `gh attestation verify Oskilo_Windows.zip -R mhmtcndsgn/Oskilo`
 
 ---
@@ -167,10 +184,23 @@ Windows sürümleri yalnızca bu repodaki herkese açık GitHub Actions iş akı
 - **Onaylayan:** [mhmtcndsgn](https://github.com/mhmtcndsgn)
 
 ### Gizlilik
-Bu program verilerinizi ya da ölçümlerinizi ağ üzerinden başka bir sisteme göndermez. Yalnızca seçtiğiniz seri cihazla haberleşir ve seçtiğiniz klasöre dosya yazar. Tek ağ istekleri güncelleme içindir: açılışta günde en fazla bir kez (**? → Açılışta güncellemeleri denetle** ile kapatılabilir) ve **Güncellemeleri kontrol et**'e bastığınızda GitHub'dan son sürüm bilgisi okunur; yeni sürüm ancak siz onaylarsanız GitHub'dan indirilir. **Hata bildir** sadece tarayıcınızda bir GitHub sayfası açar; siz göndermedikçe hiçbir şey gönderilmez.
+Bu program verilerinizi ya da ölçümlerinizi ağ üzerinden başka bir sisteme göndermez. Yalnızca seçtiğiniz cihazla (seri port ya da yerel ağdaki bir kart) haberleşir ve seçtiğiniz klasöre dosya yazar. Kartları bulmak için yalnızca yerel ağa (internete değil) küçük "kim var?" paketleri gönderir (UDP port 5099). Tek ağ istekleri güncelleme içindir: açılışta günde en fazla bir kez (**? → Açılışta güncellemeleri denetle** ile kapatılabilir) ve **Güncellemeleri kontrol et**'e bastığınızda GitHub'dan son sürüm bilgisi okunur; yeni sürüm ancak siz onaylarsanız GitHub'dan indirilir. **Hata bildir** sadece tarayıcınızda bir GitHub sayfası açar; siz göndermedikçe hiçbir şey gönderilmez.
 
 ---
 
 ## 📄 Lisans
 
-[MIT](LICENSE) © 2026 Mehmet Can
+© 2026 Mehmet Can Dusgun ([mhmtcndsgn](https://github.com/mhmtcndsgn))
+
+- **Oskilo uygulaması** [GNU Genel Kamu Lisansı v3.0 ya da sonrası (GPL-3.0-or-later)](LICENSE) ile özgür yazılımdır. Kullanabilir, inceleyebilir, paylaşabilir ve değiştirebilirsiniz. Kendisini ya da değiştirilmiş bir sürümünü dağıtırsanız, o sürüm de GPL ile ve kaynak koduyla birlikte paylaşılmalı, telif yazıları korunmalıdır.
+- [`firmware_ornek/`](firmware_ornek/) klasöründeki **kart tarafı örnek kodlar** [MIT lisanslıdır](firmware_ornek/LICENSE): kendi kart yazılımınızda, kapalı kaynak projelerde bile serbestçe kullanabilirsiniz.
+- **v3.3.0 dahil** önceki sürümler MIT lisansıyla yayınlandı ve o lisansla kalır.
+- **Ticari lisans:** Oskilo'yu kapalı kaynak bir üründe kullanmak isterseniz ayrı bir lisans için yazarla iletişime geçin.
+
+### Ad ve logo
+
+**Oskilo** adı ve Oskilo logosu Mehmet Can Dusgun'a aittir ve GPL'in kapsamında değildir. Değiştirilmiş sürümler farklı bir ad ve logo kullanmalı, resmî Oskilo olduğu izlenimini vermemelidir. Değiştirilmemiş kopyalar adı koruyabilir.
+
+### Kaynak gösterme
+
+Oskilo tezinize ya da makalenize yardımcı olduysa lütfen kaynak gösterin. GitHub'daki **Cite this repository** düğmesi [`CITATION.cff`](CITATION.cff) dosyasını kullanır.

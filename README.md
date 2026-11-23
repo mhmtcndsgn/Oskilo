@@ -11,15 +11,16 @@
 <p align="center">
   Lossless serial data logger for <b>STM32, Arduino, ESP32</b> and any board that sends data over a serial port.<br>
   Live chart, gap detection, FFT, threshold alarms and one-click export to <b>Excel / CSV / TXT</b>.<br>
-  <sub>Formerly <i>Data Logger</i> (v2.x)</sub>
+  <sub>Formerly <i>Data Logger</i> (v2.x)</sub><br>
+  <sub><b>IECIST</b></sub>
 </p>
 
 <p align="center">
-  <a href="https://github.com/mhmtcndsgn/Oskilo/releases/latest/download/Oskilo_Windows.zip"><img src="https://img.shields.io/badge/Download-Windows-0078D6?style=for-the-badge&logo=windows&logoColor=white" alt="Download for Windows"></a>
+  <a href="https://github.com/mhmtcndsgn/Oskilo/releases/latest/download/Oskilo_Setup.exe"><img src="https://img.shields.io/badge/Download-Windows-0078D6?style=for-the-badge&logo=windows&logoColor=white" alt="Download for Windows"></a>
   <a href="https://github.com/mhmtcndsgn/Oskilo/releases/latest/download/Oskilo_macOS.dmg"><img src="https://img.shields.io/badge/Download-macOS-000000?style=for-the-badge&logo=apple&logoColor=white" alt="Download for macOS"></a>
   <br>
   <a href="https://github.com/mhmtcndsgn/Oskilo/releases/latest"><img src="https://img.shields.io/github/v/release/mhmtcndsgn/Oskilo?label=latest&style=flat-square" alt="Latest release"></a>
-  <img src="https://img.shields.io/badge/license-MIT-green?style=flat-square" alt="MIT license">
+  <img src="https://img.shields.io/badge/license-GPL--3.0-blue?style=flat-square" alt="GPL-3.0 license">
 </p>
 
 ![Oskilo](docs/screenshot.png)
@@ -69,18 +70,34 @@
 
 ## ⬇️ Install
 
-### Windows 10 / 11
+### Windows 10 / 11 — installer (recommended)
+1. Download **[Oskilo_Setup.exe](https://github.com/mhmtcndsgn/Oskilo/releases/latest/download/Oskilo_Setup.exe)** and run it → **Next** → **Install**.
+   - No administrator rights needed: it installs for your user only (`%LOCALAPPDATA%\Programs\Oskilo`).
+   - Adds a Start menu shortcut (desktop shortcut optional) and can be removed from **Settings → Apps**. When removing, you are asked whether to delete your settings too; your recordings (Documents\Oskilo) are never deleted.
+   - Updates from inside the app (**? → Check for updates**) keep working.
+   - The installer is not code-signed yet (see [Code signing](#-code-signing-policy)). If a blue "Windows protected your PC" window appears: **More info → Run anyway**.
+
+### Windows — portable (no installation)
 1. Download **[Oskilo_Windows.zip](https://github.com/mhmtcndsgn/Oskilo/releases/latest/download/Oskilo_Windows.zip)**.
-2. **Before extracting:** right-click the zip → **Properties** → tick **Unblock** at the bottom → **OK**.
-   *This prevents the "Do you want to run this file?" / SmartScreen warning. The app is not code-signed yet (see [Code signing](#-code-signing-policy)). If you skip this, the app offers to remove the mark itself on first launch, so the warning appears only once.*
-3. Extract and run **`Oskilo.exe`**. Keep it next to its `_internal` folder.
+2. **Before extracting:** right-click the zip → **Properties** → tick **Unblock** at the bottom → **OK** (prevents the SmartScreen warning; if you skip it, the app offers to do it on first launch).
+3. Extract and run **`Oskilo.exe`**. Keep it next to its `_internal` folder. Good for USB sticks and lab PCs.
+
+### Minimum requirements
+| | Minimum | Recommended |
+|---|---|---|
+| OS | Windows 10 64-bit / macOS 12 (Apple Silicon) | Windows 11 / macOS 14 |
+| CPU / RAM | 2 cores, 4 GB | 4 cores, 8 GB |
+| Screen | 1366×768 (100–150 % scaling) | 1920×1080 |
+| Disk | 400 MB for the app + space for recordings | SSD |
+
+On slow computers turn on **🎨 → Light mode**: the chart is redrawn less often and without smoothing. Recording is never affected. At 1 kHz × 4 channels a day of recording is about 9 GB as CSV — check free disk space before multi-week tests.
 
 ### macOS (Apple Silicon, M1 and later)
 1. Download **[Oskilo_macOS.dmg](https://github.com/mhmtcndsgn/Oskilo/releases/latest/download/Oskilo_macOS.dmg)** and drag the app to **Applications**.
 2. First launch: open the app once, then go to **System Settings → Privacy & Security** and click **Open Anyway** (on older macOS: right-click the app → **Open**).
 
 ### Verify your download (optional)
-- Compare the file's SHA-256 with `SHA256SUMS.txt` on the release page: `Get-FileHash Oskilo_Windows.zip` (PowerShell) or `shasum -a 256 Oskilo_macOS.dmg`.
+- Compare the file's SHA-256 with `SHA256SUMS.txt` on the release page: `Get-FileHash Oskilo_Setup.exe` (PowerShell) or `shasum -a 256 Oskilo_macOS.dmg`.
 - Check that it was built by this repository's GitHub Actions: `gh attestation verify Oskilo_Windows.zip -R mhmtcndsgn/Oskilo`
 
 ---
@@ -186,10 +203,23 @@ Windows builds are produced only by the public GitHub Actions workflow in this r
 - **Approvers:** [mhmtcndsgn](https://github.com/mhmtcndsgn)
 
 ### Privacy policy
-This program does not send any of your data or measurements to other networked systems. It only communicates with the serial device you select and writes files to the folder you choose. The only network requests are for updates: at most once a day at startup (can be turned off under **? → Check for updates at startup**) and when you click **Check for updates**, the latest version info is read from the GitHub API; the new version is downloaded from GitHub only after you confirm. **Report a problem** only opens a GitHub page in your browser; nothing is sent until you submit it yourself.
+This program does not send any of your data or measurements to other networked systems. It only communicates with the device you select (serial port, or a board on your local network) and writes files to the folder you choose. To find boards, it sends small "who is there?" packets to the local network only (UDP port 5099), never to the internet. The only network requests are for updates: at most once a day at startup (can be turned off under **? → Check for updates at startup**) and when you click **Check for updates**, the latest version info is read from the GitHub API; the new version is downloaded from GitHub only after you confirm. **Report a problem** only opens a GitHub page in your browser; nothing is sent until you submit it yourself.
 
 ---
 
 ## 📄 License
 
-[MIT](LICENSE) © 2026 Mehmet Can
+© 2026 Mehmet Can Dusgun ([mhmtcndsgn](https://github.com/mhmtcndsgn))
+
+- **The Oskilo application** is free software under the [GNU General Public License v3.0 or later](LICENSE). You may use, study, share and modify it. If you distribute it or a modified version, it must stay under the GPL with its source code available, and the copyright notices must be kept.
+- **Board-side example code** in [`firmware_ornek/`](firmware_ornek/) is under the [MIT license](firmware_ornek/LICENSE), so you can use it freely in your own firmware, including closed-source projects.
+- Releases up to and including **v3.3.0** were published under the MIT license and stay available under it.
+- **Commercial license:** if you want to use Oskilo in a closed-source product, contact the author for a separate license.
+
+### Name and logo
+
+The name **Oskilo** and the Oskilo logo belong to Mehmet Can Dusgun and are not covered by the GPL. Modified versions must use a different name and logo and must not suggest that they are the official Oskilo. Unmodified copies may keep the name.
+
+### Citing
+
+If Oskilo helps your thesis or paper, please cite it. GitHub's **Cite this repository** button uses [`CITATION.cff`](CITATION.cff).
