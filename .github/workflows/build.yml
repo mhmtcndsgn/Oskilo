@@ -38,8 +38,17 @@ env:
   PIP_DISABLE_PIP_VERSION_CHECK: "1"
 
 jobs:
+  # Bütün testler (çekirdek + arayüz + dayanıklılık) üç işletim sisteminde, pencere göstermeden
   test:
-    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ ubuntu-latest, windows-latest, macos-latest ]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    env:
+      QT_QPA_PLATFORM: offscreen
+      OSKILO_PERF_FACTOR: "3"          # CI makineleri yavaş/değişken: hız sınırlarına pay
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -48,7 +57,7 @@ jobs:
         with:
           python-version: "3.12"
       - name: Sürüm etiketi kontrolü
-        if: inputs.version != '' || startsWith(github.ref, 'refs/tags/v')
+        if: runner.os == 'Linux' && (inputs.version != '' || startsWith(github.ref, 'refs/tags/v'))
         env:
           VER: ${{ inputs.version || github.ref_name }}
         run: |
@@ -62,10 +71,15 @@ jobs:
               sys.exit(f"Sürüm uyuşmuyor: {tag} yazıldı ama stm32logger/__init__.py içinde {__version__} var")
           print("OK", tag)
           EOF
+      - name: Qt için sistem kütüphaneleri (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q --no-install-recommends libegl1 libgl1 libxkbcommon0 libfontconfig1 libdbus-1-3
       - name: Bağımlılıklar (parmak izi kontrollü)
         run: pip install --require-hashes -r requirements-lock.txt
       - name: Testler
-        run: python -m pytest -q tests
+        run: python -m pytest -q -ra tests
 
   build-windows:
     needs: test
@@ -87,7 +101,7 @@ jobs:
           --name "Oskilo"
           --icon assets/icon.ico
           --version-file packaging/version_info.txt
-          --add-data "assets;assets"
+          --add-data "assets;assets" --add-data "LICENSE;."
           --exclude-module tkinter --exclude-module matplotlib --exclude-module scipy
           --exclude-module PIL --exclude-module PyQt5 --exclude-module PyQt6
           --exclude-module PySide6.QtNetwork --exclude-module PySide6.QtQml --exclude-module PySide6.QtQuick
@@ -122,10 +136,48 @@ jobs:
       - name: Zip
         shell: pwsh
         run: Compress-Archive -Path dist/Oskilo -DestinationPath Oskilo_Windows.zip
+      - name: Kurulum programı (Inno Setup, yönetici izni istemez)
+        shell: pwsh
+        run: |
+          $iscc = Join-Path ${env:ProgramFiles(x86)} "Inno Setup 6\ISCC.exe"
+          if (-not (Test-Path $iscc)) { choco install innosetup -y --no-progress | Out-Null }
+          if (-not (Test-Path $iscc)) { Write-Host "Inno Setup bulunamadı"; exit 1 }
+          $ver = python -c "from stm32logger import __version__; print(__version__)"
+          & $iscc "/DMyAppVersion=$ver" "/DSourceDir=$PWD\dist\Oskilo" "/O$PWD" packaging\oskilo.iss
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+          Get-Item Oskilo_Setup.exe | Format-List Name, Length
+      - name: Kurulumu dene (sessiz kur → aç → kaldır)
+        shell: pwsh
+        timeout-minutes: 6
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: |
+          $p = Start-Process -FilePath ".\Oskilo_Setup.exe" -ArgumentList "/VERYSILENT","/SUPPRESSMSGBOXES","/NORESTART","/LOG=kurulum.log" -Wait -PassThru
+          if ($p.ExitCode -ne 0) { Get-Content kurulum.log -Tail 40; exit 1 }
+          $app = Join-Path $env:LOCALAPPDATA "Programs\Oskilo"
+          if (-not (Test-Path "$app\Oskilo.exe")) { Write-Host "Oskilo.exe kurulmadı"; exit 1 }
+          if (-not (Test-Path "$app\manifest.sha256")) { Write-Host "manifest yok (güncelleme çalışmaz)"; exit 1 }
+          $key = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\{C7A79E34-102C-58D8-A91C-73C48CFE1405}_is1"
+          $reg = Get-ItemProperty $key
+          Write-Host "Uygulamalar listesi: $($reg.DisplayName) $($reg.DisplayVersion) -> $($reg.InstallLocation)"
+          $lnk = Join-Path $env:APPDATA "Microsoft\Windows\Start Menu\Programs\Oskilo.lnk"
+          if (-not (Test-Path $lnk)) { Write-Host "Başlat menüsü kısayolu yok"; exit 1 }
+          $p = Start-Process -FilePath "$app\Oskilo.exe" -ArgumentList "--selftest","$PWD\selftest_kurulu.txt" -Wait -PassThru
+          Get-Content selftest_kurulu.txt
+          if ($p.ExitCode -ne 0) { exit 1 }
+          New-Item -ItemType File "$app\_oskilo_new\yazma.tmp" -Force | Out-Null
+          Start-Process -FilePath "$app\unins000.exe" -ArgumentList "/VERYSILENT","/SUPPRESSMSGBOXES","/NORESTART" -Wait
+          for ($i = 0; $i -lt 60 -and ((Test-Path $app) -or (Test-Path $key)); $i++) { Start-Sleep -Seconds 1 }
+          if (Test-Path $app) { Write-Host "klasör kaldı:"; Get-ChildItem $app -Recurse | Select-Object -First 20; exit 1 }
+          if (Test-Path $key) { Write-Host "Uygulamalar kaydı kaldı"; exit 1 }
+          if (Test-Path $lnk) { Write-Host "kısayol kaldı"; exit 1 }
+          Write-Host "kur / aç / kaldır: tamam"
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: Oskilo_Windows
-          path: Oskilo_Windows.zip
+          path: |
+            Oskilo_Windows.zip
+            Oskilo_Setup.exe
 
   build-macos:
     needs: test
@@ -144,7 +196,7 @@ jobs:
           pyinstaller --noconfirm --clean --windowed --onedir --noupx
           --name "Oskilo"
           --icon assets/icon.icns
-          --add-data "assets:assets"
+          --add-data "assets:assets" --add-data "LICENSE:."
           --osx-bundle-identifier "com.mhmtcndsgn.datalogger"
           --exclude-module tkinter --exclude-module matplotlib --exclude-module scipy
           --exclude-module PIL --exclude-module PyQt5 --exclude-module PyQt6
@@ -184,12 +236,13 @@ jobs:
       - name: SHA256SUMS
         working-directory: assets_out
         run: |
-          sha256sum Oskilo_Windows.zip Oskilo_macOS.dmg > SHA256SUMS.txt
+          sha256sum Oskilo_Setup.exe Oskilo_Windows.zip Oskilo_macOS.dmg > SHA256SUMS.txt
           cat SHA256SUMS.txt
       - name: Derleme kanıtı (artifact attestation)
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
           subject-path: |
+            assets_out/Oskilo_Setup.exe
             assets_out/Oskilo_Windows.zip
             assets_out/Oskilo_macOS.dmg
       - uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
@@ -204,17 +257,19 @@ jobs:
 
             | | |
             |---|---|
-            | 🖥️ **Windows 10/11** | `Oskilo_Windows.zip` → right-click → **Properties → Unblock** → extract → `Oskilo.exe` |
+            | 🖥️ **Windows 10/11 (recommended / önerilen)** | `Oskilo_Setup.exe` → run → Next. No admin rights needed. If SmartScreen appears: **More info → Run anyway** |
+            | 🖥️ **Windows (portable / kurulumsuz)** | `Oskilo_Windows.zip` → right-click → **Properties → Unblock** → extract → `Oskilo.exe` |
             | 🍎 **macOS (Apple Silicon)** | `Oskilo_macOS.dmg` → drag to Applications → first launch: **System Settings → Privacy & Security → Open Anyway** |
 
-            **TR:** Windows'ta zip'e sağ tıkla → **Özellikler → Engellemeyi kaldır** → Tamam, sonra çıkar. Böylece "açmak istiyor musunuz" uyarısı çıkmaz. macOS'ta ilk açılışta **Sistem Ayarları → Gizlilik ve Güvenlik → Yine de Aç**.
+            **TR:** Windows'ta en kolayı `Oskilo_Setup.exe`: çalıştır → İleri. Yönetici izni istemez; Başlat menüsüne eklenir, "Uygulamalar"dan kaldırılır, uygulama içinden güncellenir. Mavi "Windows bilgisayarınızı korudu" penceresi çıkarsa **Ek bilgi → Yine de çalıştır**. Kurulumsuz kullanmak istersen zip'e sağ tıkla → **Özellikler → Engellemeyi kaldır** → Tamam, sonra çıkar. Böylece "açmak istiyor musunuz" uyarısı çıkmaz. macOS'ta ilk açılışta **Sistem Ayarları → Gizlilik ve Güvenlik → Yine de Aç**.
 
             ### Verify the download / İndirmeyi doğrula
             - `SHA256SUMS.txt` lists the SHA-256 fingerprint of each file. / Her dosyanın parmak izi `SHA256SUMS.txt` içinde.
-              Windows: `Get-FileHash Oskilo_Windows.zip` · macOS: `shasum -a 256 Oskilo_macOS.dmg`
+              Windows: `Get-FileHash Oskilo_Setup.exe` · macOS: `shasum -a 256 Oskilo_macOS.dmg`
             - Built by GitHub Actions from this repository (build provenance): `gh attestation verify Oskilo_Windows.zip -R mhmtcndsgn/Oskilo`
             - In the app / Uygulamada: **? → About / Hakkında → Verify files / Dosyaları doğrula**
           files: |
+            assets_out/Oskilo_Setup.exe
             assets_out/Oskilo_Windows.zip
             assets_out/Oskilo_macOS.dmg
             assets_out/SHA256SUMS.txt
